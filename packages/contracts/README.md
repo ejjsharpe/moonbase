@@ -6,7 +6,7 @@
 
 | Subpaths | What they give |
 | --- | --- |
-| `chat`, `chat-schema`, `chat-rpc`, `chat-validation`, `chat-errors` | Chat DTOs and commands, their decoders, `ChatRpcs`, `checkChatOutput` (a reply's decoding, authority and size check, run once by the client that receives it) and the chat errors |
+| `chat`, `chat-schema`, `chat-rpc`, `chat-validation`, `chat-errors` | Chat DTOs and commands, their decoders, `ChatRpcs`, `checkChatOutput` (an Effect checking a decoded reply echoes its request, stays within its authority and fits the reply limit) and the chat errors |
 | `workspace`, `workspace-schema`, `workspace-service` | The client-facing workspace: targets (`CheckoutTarget`, plain folder or Git), files, Git, operations, limits such as `maximumFileBytes`, and the `WorkspaceService` port |
 | `workspace-host`, `workspace-host-schema`, `workspace-rpc`, `workspace-host-errors`, `workspace-errors` | The file host's commands (journalled by installation, client and request ID), `WorkspaceRpcs`, the host's errors (`WorkspaceHostError`) and the client's (`WorkspaceError`) |
 | `recovery`, `recovery-schema` | The client recovery store's buffer-keyed format (`RecoveryState`, `RecoveryOutline`), `loadRecovery` and its edits |
@@ -24,7 +24,7 @@
 ## Errors (D14)
 
 - Each module defines `Schema.TaggedError` classes named for what happened, with literal fields (`problem`, `reason`, `refusal`) and a `message` built from them. Each exports its classes (`chatErrors`, `fileHostErrors`, …), its union type and a guard.
-- Each RPC procedure declares the union it can fail with (`chatErrorSchemaOf`, `daemonErrorSchemas`, `workspaceErrorSchemaOf`), always including `hostErrors`. Handlers pass service errors on, and the UI turns tags into text.
+- Each RPC procedure declares the union it can fail with as its `error`, always including `hostErrors`: read it on the procedure in its group (`ChatRpcs`, `LocalHostRpcs`, `ProviderSetupRpcs`, `WorkspaceRpcs`). Handlers pass service errors on, and the UI turns tags into text.
 - `UncertainError` (may have committed: check, never resend), `CancelledError` and `UnauthorizedError` in `errors` are the outcomes every caller treats the same.
 - A decision that depends on what a failure means rather than what failed asks `error-groups` (`isRefusal`, `isConflict`, `isUnavailable`, `isUncertain`, …). `isKnownError` says whether a failure is one contracts defines, so its message may be shown.
 - An error sent to or received from an untrusted host carries no cause, path or text the host wrote (D11). A field holding host text, such as Git output, is optional so a client can drop it.

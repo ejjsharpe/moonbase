@@ -13,8 +13,8 @@ import {
   SubscriptionRef,
 } from 'effect';
 import type { Models } from '@earendil-works/pi-ai/models';
-import { ProviderSetupService, type ProviderSetupHandlers } from '@moonbase/contracts/services';
-import type { ProviderCommand, ProviderInput, ProviderState } from '@moonbase/contracts/providers';
+import { ProviderSetupService } from '@moonbase/contracts/services';
+import type { ProviderCommand, ProviderState } from '@moonbase/contracts/providers';
 import { decodeProviderOutput, readProviderSignInUrl } from '@moonbase/contracts/providers-schema';
 import {
   isProviderSetupError,
@@ -180,7 +180,7 @@ export const ProviderSetupLive = (
           Effect.andThen(getCurrentFlow(owner, flowId)),
           Effect.flatMap((flow) =>
             flow.url
-              ? Effect.try({ try: () => validateProviderUrl(flow.url!), catch: (error) => error })
+              ? Effect.try({ try: () => validateProviderUrl(flow.url!), catch: safeError })
               : refuse('no-sign-in-url'),
           ),
         );
@@ -342,115 +342,117 @@ export const ProviderSetupLive = (
           return id;
         });
 
-      const getStatus = (
-        owner: string,
-        operation: ProviderCommand,
-      ): Effect.Effect<ProviderState, unknown> =>
+      /** The owner's setup state; the provider SDK's catalog and sign-in prompts enter here. */
+      const getStatus = (owner: string, operation: ProviderCommand) =>
         Effect.gen(function* () {
           const providers = yield* listProviders(config.models, config.getCheckProblem);
           const flow = (yield* SubscriptionRef.get(setup)).owners.get(owner)?.state ?? null;
-          // The state carries the provider SDK's catalog and sign-in prompts, which enter here.
           return yield* Effect.try({
             try: () => decodeProviderOutput(operation, { providers, flow }),
-            catch: (error) => error,
+            catch: safeError,
           });
         });
-      const invoke = <K extends ProviderCommand>(
+      /** Cancels and forgets the flow `started` if it is still the owner's. */
+      const forgetFlow = (owner: string, started: string) =>
+        Effect.gen(function* () {
+          if ((yield* SubscriptionRef.get(setup)).owners.get(owner)?.state.id !== started) return;
+          yield* cancelFlow(owner);
+          yield* SubscriptionRef.update(setup, (s) => {
+            if (s.owners.get(owner)?.state.id !== started) return s;
+            const owners = new Map(s.owners);
+            owners.delete(owner);
+            return { ...s, owners };
+          });
+        });
+      /**
+       * Runs one of an owner's commands: refused for a released owner, then `run`, announcing a
+       * change if `changes`, then the owner's state. A flow `run` started whose state can't be
+       * read is cancelled and forgotten.
+       */
+      const respond = <E>(
         owner: string,
-        operation: K,
-        value: ProviderInput<K>,
-      ): Effect.Effect<ProviderState, unknown> =>
+        operation: ProviderCommand,
+        run: Effect.Effect<string | void, E>,
+        changes: boolean,
+      ) =>
         Effect.gen(function* () {
           yield* requireHeld(owner);
           yield* sweepOwners(owner);
-          let started: string | undefined;
-          if (operation === 'startProviderLogin') {
-            const { providerId } = value as ProviderInput<'startProviderLogin'>;
-            started = yield* startFlow(owner, providerId);
-          } else if (operation === 'answerProviderPrompt') {
-            const { flowId, promptId, answer } = value as ProviderInput<'answerProviderPrompt'>;
-            // The prompt is taken in the same step that checks it, so it is answered once.
-            const taken = yield* SubscriptionRef.modify(
-              setup,
-              (s): [Prompt | ProviderSetupRefusedError, Setup] => {
-                const flow = s.owners.get(owner);
-                if (!isRunning(flow, flowId)) return [refusal('sign-in-inactive'), s];
-                const pending = flow.prompt;
-                if (!pending || pending.id !== promptId) return [refusal('prompt-obsolete'), s];
-                if (!answer.trim() || (pending.options && !pending.options.includes(answer)))
-                  return [refusal('invalid-answer'), s];
-                return [
-                  pending,
-                  withFlow(s, owner, {
-                    ...flow,
-                    prompt: undefined,
-                    state: { ...flow.state, prompt: null },
-                  }),
-                ];
-              },
-            );
-            if (taken instanceof ProviderSetupRefusedError) return yield* Effect.fail(taken);
-            yield* Deferred.succeed(taken.answer, answer);
-          } else if (operation === 'cancelProviderLogin') {
-            yield* cancel(owner, (value as ProviderInput<'cancelProviderLogin'>).flowId);
-          } else if (operation === 'openProviderUrl') {
-            const url = yield* getProviderUrl(
-              owner,
-              (value as ProviderInput<'openProviderUrl'>).flowId,
-            );
-            const { openUrl } = config;
-            if (!openUrl)
-              return yield* Effect.fail(
-                new ProviderSetupUnavailableError({ reason: 'client-opens-links' }),
-              );
-            // The opener is injected: a throw is its failure, like a failed Effect.
-            yield* Effect.flatten(Effect.try({ try: () => openUrl(url), catch: (error) => error }));
-          } else if (operation === 'logoutProvider') {
-            const { providerId } = value as ProviderInput<'logoutProvider'>;
-            if (!isLocalProvider(providerId)) return yield* refuse('unknown-provider');
-            if (isClaudeCodeSignIn(providerId)) return yield* refuse('claude-code-sign-in');
-            yield* cancel(owner);
-            yield* Effect.tryPromise({
-              try: () => config.models.logout(providerId),
-              catch: (error) => error,
-            });
-          }
-          if (operation !== 'getProviders' && operation !== 'openProviderUrl') yield* changed;
+          const started = yield* run;
+          if (changes) yield* changed;
           return yield* getStatus(owner, operation).pipe(
             Effect.tapError(() =>
-              started === undefined
-                ? Effect.void
-                : Effect.gen(function* () {
-                    if ((yield* SubscriptionRef.get(setup)).owners.get(owner)?.state.id !== started)
-                      return;
-                    yield* cancelFlow(owner);
-                    yield* SubscriptionRef.update(setup, (s) => {
-                      if (s.owners.get(owner)?.state.id !== started) return s;
-                      const owners = new Map(s.owners);
-                      owners.delete(owner);
-                      return { ...s, owners };
-                    });
-                  }),
+              typeof started === 'string' ? forgetFlow(owner, started) : Effect.void,
             ),
           );
+        }).pipe(Effect.mapError(safeError));
+      /** Answers the flow's prompt: taken in the same step that checks it, so it is answered once. */
+      const answerPrompt = (owner: string, flowId: string, promptId: string, answer: string) =>
+        Effect.gen(function* () {
+          const taken = yield* SubscriptionRef.modify(
+            setup,
+            (s): [Prompt | ProviderSetupRefusedError, Setup] => {
+              const flow = s.owners.get(owner);
+              if (!isRunning(flow, flowId)) return [refusal('sign-in-inactive'), s];
+              const pending = flow.prompt;
+              if (!pending || pending.id !== promptId) return [refusal('prompt-obsolete'), s];
+              if (!answer.trim() || (pending.options && !pending.options.includes(answer)))
+                return [refusal('invalid-answer'), s];
+              return [
+                pending,
+                withFlow(s, owner, {
+                  ...flow,
+                  prompt: undefined,
+                  state: { ...flow.state, prompt: null },
+                }),
+              ];
+            },
+          );
+          if (taken instanceof ProviderSetupRefusedError) return yield* Effect.fail(taken);
+          yield* Deferred.succeed(taken.answer, answer);
         });
+      /** Opens the flow's sign-in URL through the injected opener; a throw is its failure. */
+      const openFlowUrl = (owner: string, flowId: string) =>
+        Effect.gen(function* () {
+          const url = yield* getProviderUrl(owner, flowId);
+          const { openUrl } = config;
+          if (!openUrl)
+            return yield* Effect.fail(
+              new ProviderSetupUnavailableError({ reason: 'client-opens-links' }),
+            );
+          yield* Effect.flatten(Effect.try({ try: () => openUrl(url), catch: safeError }));
+        });
+      const logout = (owner: string, providerId: string) =>
+        Effect.gen(function* () {
+          if (!isLocalProvider(providerId)) return yield* refuse('unknown-provider');
+          if (isClaudeCodeSignIn(providerId)) return yield* refuse('claude-code-sign-in');
+          yield* cancel(owner);
+          yield* Effect.tryPromise({
+            try: () => config.models.logout(providerId),
+            catch: safeError,
+          });
+        });
+      const getProviders = (owner: string) => respond(owner, 'getProviders', Effect.void, false);
 
-      const operations: readonly ProviderCommand[] = [
-        'getProviders',
-        'startProviderLogin',
-        'answerProviderPrompt',
-        'cancelProviderLogin',
-        'openProviderUrl',
-        'logoutProvider',
-      ];
       return {
-        forOwner: (owner) =>
-          Object.fromEntries(
-            operations.map((operation) => [
-              operation,
-              (input: never) => invoke(owner, operation, input).pipe(Effect.mapError(safeError)),
-            ]),
-          ) as ProviderSetupHandlers,
+        forOwner: (owner) => ({
+          getProviders: () => getProviders(owner),
+          startProviderLogin: ({ providerId }) =>
+            respond(owner, 'startProviderLogin', startFlow(owner, providerId), true),
+          answerProviderPrompt: ({ flowId, promptId, answer }) =>
+            respond(
+              owner,
+              'answerProviderPrompt',
+              answerPrompt(owner, flowId, promptId, answer),
+              true,
+            ),
+          cancelProviderLogin: ({ flowId }) =>
+            respond(owner, 'cancelProviderLogin', cancel(owner, flowId), true),
+          openProviderUrl: ({ flowId }) =>
+            respond(owner, 'openProviderUrl', openFlowUrl(owner, flowId), false),
+          logoutProvider: ({ providerId }) =>
+            respond(owner, 'logoutProvider', logout(owner, providerId), true),
+        }),
         releaseOwner: (owner) =>
           SubscriptionRef.update(setup, (s) => {
             const released = new Set(s.released);
@@ -465,8 +467,7 @@ export const ProviderSetupLive = (
           SubscriptionRef.changes(setup).pipe(
             // Changes during a read start one more; a consumer behind holds only the latest.
             Stream.buffer({ capacity: 1, strategy: 'sliding' }),
-            Stream.mapEffect(() => invoke(owner, 'getProviders', {} as never)),
-            Stream.mapError(safeError),
+            Stream.mapEffect(() => getProviders(owner)),
             Stream.buffer({ capacity: 1, strategy: 'sliding' }),
           ),
         getProviderUrl: (owner, flowId) =>

@@ -19,3 +19,6 @@ export const optional = <T, E>(schema: Schema.Codec<T, E>) =>
   );
 
 export const voidResult = Schema.declare<void>((value): value is void => value === undefined);
+/** A reply's schema on an RPC wire: no reply (`voidResult`) is `Schema.Void`, which encodes as JSON. */
+export const toWireReply = <S extends Schema.Top>(schema: S) =>
+  (schema === (voidResult as unknown) ? Schema.Void : schema) as S;

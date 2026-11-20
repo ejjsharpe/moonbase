@@ -32,7 +32,11 @@ const isRefused = (exit: Exit.Exit<unknown, unknown>) =>
   );
 
 /** A mutation's input, which its request ID binds whole. */
-type MutationInput = { requestId?: string; ownerId?: string };
+export type MutationInput = {
+  readonly requestId?: string;
+  readonly ownerId?: string;
+  readonly [field: string]: unknown;
+};
 /** A mutation's outcome, with the request that ran it. */
 type Outcome = { operation: string; input: MutationInput; exit: Exit.Exit<unknown, unknown> };
 
@@ -65,7 +69,7 @@ class RequestKey implements Equal.Equal {
  * requests came after it. Runs belong to the scope, and finish even if their callers go.
  */
 export const makeMutationReplay = Effect.gen(function* () {
-  const running = yield* FiberMap.make<string, Outcome>();
+  const running = yield* FiberMap.make<string, Outcome, never>();
   // Finding a request's run and starting it if there is none happen in one synchronous step:
   // `FiberMap.run` forks and records the run without yielding, so no other lookup comes between.
   const findOrStart = (key: RequestKey) =>
@@ -87,12 +91,17 @@ export const makeMutationReplay = Effect.gen(function* () {
         Exit.isSuccess(exit) && isRefused(exit.value.exit) ? Duration.zero : Duration.infinity,
     },
   );
-  return <A>(operation: string, input: MutationInput, run: Effect.Effect<A, unknown>) =>
+  return <A, E>(
+    operation: string,
+    input: MutationInput,
+    run: Effect.Effect<A, E>,
+  ): Effect.Effect<A, E | RequestReusedError> =>
     Effect.gen(function* () {
       const outcome = yield* Cache.get(outcomes, new RequestKey(operation, input, run));
       if (outcome.operation !== operation || !areJsonValuesEqual(outcome.input, input))
         return yield* new RequestReusedError();
-      return (yield* outcome.exit) as A;
+      // The outcome of a run of this operation with this input: what `run` ends with.
+      return yield* outcome.exit as Exit.Exit<A, E>;
     });
 });
 

@@ -1,4 +1,6 @@
 import { Effect, Layer, Semaphore, Stream } from 'effect';
+import type { RpcGroup } from 'effect/rpc';
+import type { RpcClientError } from 'effect/rpc/RpcClientError';
 import { CancelledError, UnauthorizedError, UncertainError } from '@moonbase/contracts/errors';
 import { chatHostCapabilities, type ChatHostTarget } from '@moonbase/contracts/host';
 import { IncompatibleHostError } from '@moonbase/contracts/host-errors';
@@ -32,28 +34,10 @@ import {
   WorktreeGitError,
   type WorkspaceHostError,
 } from '@moonbase/contracts/workspace-host-errors';
-import {
-  decodeHostInput,
-  hostInputCheckout,
-  hostInputSchemas,
-} from '@moonbase/contracts/workspace-host-schema';
-import {
-  hostDeadlineMs,
-  isHostMutation,
-  isHostStatusCall,
-  workspaceErrorSchemaOf,
-  WorkspaceRpcs,
-} from '@moonbase/contracts/workspace-rpc';
-import { makeRpcLink, type ErrorClass } from './rpc-link.ts';
+import { decodeHostInput, hostInputCheckout } from '@moonbase/contracts/workspace-host-schema';
+import { hostDeadlineMs, isHostStatusCall, WorkspaceRpcs } from '@moonbase/contracts/workspace-rpc';
+import { makeRpcLink, type ProcedureMethod } from './rpc-link.ts';
 
-/** The errors the workspace's procedures declare: the only failures a client takes from them. */
-const remoteErrors = [
-  ...new Set(
-    [workspaceErrorSchemaOf('readFile'), workspaceErrorSchemaOf('turnChatIntoProject')].flatMap(
-      (union) => union.members as readonly ErrorClass[],
-    ),
-  ),
-];
 /** The client's own text for a refusal a host recorded, by its kind. */
 const recordedRefusals = {
   invalid: 'The host refused this request as invalid.',
@@ -73,7 +57,7 @@ export function presentWorkspaceError(
   error: WorkspaceHostError,
   operation: string,
   input?: unknown,
-) {
+): WorkspaceHostError {
   switch (error._tag) {
     case 'BranchTakenError': {
       const branch =
@@ -114,6 +98,8 @@ export function presentWorkspaceError(
       return error;
   }
 }
+
+type WorkspaceRpc = RpcGroup.Rpcs<typeof WorkspaceRpcs>;
 
 /** Operations whose reply names a checkout: one they made or opened. */
 const checkoutMakers: ReadonlySet<string> = new Set<HostCommand>([
@@ -162,13 +148,6 @@ export const RemoteWorkspaceHostLive = (config: {
         capability: chatHostCapabilities.workspace,
         inboundBytes: workspaceRpcLimits.messageBytes,
         pingTimeoutMs: workspacePingTimeoutMs,
-        errors: remoteErrors,
-        present: (error, operation, payload) =>
-          presentWorkspaceError(
-            error as WorkspaceHostError,
-            operation,
-            (payload as { input?: unknown }).input,
-          ),
       });
       const places = yield* Semaphore.make(workspaceRpcLimits.requests);
       // The daemon's in-flight input bound, kept here too by encoded bytes, so a request the daemon
@@ -202,52 +181,70 @@ export const RemoteWorkspaceHostLive = (config: {
           (prepared) => Effect.as(ownHost(operation, prepared.input), prepared),
         );
       const send =
-        <K extends HostCommand>(operation: K) =>
+        <K extends HostCommand, E extends WorkspaceHostError | RpcClientError>(
+          operation: K,
+          request: (
+            method: ProcedureMethod<WorkspaceRpc, K>,
+            payload: { host: ChatHostTarget; input: HostInput<K> },
+          ) => Effect.Effect<HostOutput<K>, E>,
+        ) =>
         (raw: HostInput<K>): Effect.Effect<HostOutput<K>, WorkspaceHostError> =>
           Effect.flatMap(prepare(operation, raw), ({ input, size }) =>
-            link.call<HostOutput<K>, WorkspaceHostError>(
-              operation,
-              { host, input },
-              {
-                mutation: isHostMutation(operation),
-                capability: chatHostCapabilities.workspace,
-                deadlineMs: hostDeadlineMs(operation),
-                // Status calls have places of their own and are not charged for their input.
-                places: isHostStatusCall(operation)
-                  ? [{ semaphore: statusPlaces, permits: 1 }]
-                  : [
-                      { semaphore: places, permits: 1 },
-                      { semaphore: bytes, permits: size },
-                    ],
-                check: (output) => {
-                  for (const checkout of outputCheckouts(operation, output))
-                    if (checkout.hostId !== host.hostId)
-                      throw new IncompatibleHostError({ reason: 'invalid-reply' });
-                },
-              },
-            ),
+            link.call(operation, (method) => request(method, { host, input }), {
+              capability: chatHostCapabilities.workspace,
+              deadlineMs: hostDeadlineMs(operation),
+              // Status calls have places of their own and are not charged for their input.
+              places: isHostStatusCall(operation)
+                ? [{ semaphore: statusPlaces, permits: 1 }]
+                : [
+                    { semaphore: places, permits: 1 },
+                    { semaphore: bytes, permits: size },
+                  ],
+              present: (error) => presentWorkspaceError(error, operation, input),
+              check: (output) =>
+                outputCheckouts(operation, output).every(
+                  (checkout) => checkout.hostId === host.hostId,
+                )
+                  ? Effect.void
+                  : Effect.fail(new IncompatibleHostError({ reason: 'invalid-reply' })),
+            }),
           );
-      const handlers = Object.fromEntries(
-        (Object.keys(hostInputSchemas) as HostCommand[]).map((operation) => [
-          operation,
-          send(operation),
-        ]),
-      ) as { [K in HostCommand]: ReturnType<typeof send<K>> };
       return {
-        ...handlers,
+        openCheckout: send('openCheckout', (method, payload) => method(payload)),
+        verifyCheckout: send('verifyCheckout', (method, payload) => method(payload)),
+        readFile: send('readFile', (method, payload) => method(payload)),
+        saveFile: send('saveFile', (method, payload) => method(payload)),
+        listDirectory: send('listDirectory', (method, payload) => method(payload)),
+        getIgnoredPaths: send('getIgnoredPaths', (method, payload) => method(payload)),
+        gitStatus: send('gitStatus', (method, payload) => method(payload)),
+        listWorktrees: send('listWorktrees', (method, payload) => method(payload)),
+        createWorktree: send('createWorktree', (method, payload) => method(payload)),
+        initializeRepository: send('initializeRepository', (method, payload) => method(payload)),
+        readComparison: send('readComparison', (method, payload) => method(payload)),
+        lookupFiles: send('lookupFiles', (method, payload) => method(payload)),
+        searchText: send('searchText', (method, payload) => method(payload)),
+        inspectEntries: send('inspectEntries', (method, payload) => method(payload)),
+        mutate: send('mutate', (method, payload) => method(payload)),
+        operationStatus: send('operationStatus', (method, payload) => method(payload)),
+        acknowledgeOperation: send('acknowledgeOperation', (method, payload) => method(payload)),
+        saveStatus: send('saveStatus', (method, payload) => method(payload)),
+        acknowledgeSave: send('acknowledgeSave', (method, payload) => method(payload)),
+        listOperations: send('listOperations', (method, payload) => method(payload)),
+        createChatWorktree: send('createChatWorktree', (method, payload) => method(payload)),
+        turnChatIntoProject: send('turnChatIntoProject', (method, payload) => method(payload)),
+        captureImports: send('captureImports', (method, payload) => method(payload)),
+        releaseImports: send('releaseImports', (method, payload) => method(payload)),
         watch: ({ checkout }) =>
           Stream.unwrap(
             Effect.as(
               ownHost('watchWorkspace', { checkout }),
               link
-                .follow<WorkspaceWatchValue, WorkspaceHostError>(
-                  'watchWorkspace',
-                  { host, checkout },
-                  {
-                    capability: chatHostCapabilities.workspace,
-                    next: (_previous, value) => value as WorkspaceWatchValue,
-                  },
-                )
+                .follow('watchWorkspace', (method) => method({ host, checkout }), {
+                  capability: chatHostCapabilities.workspace,
+                  present: (error) => presentWorkspaceError(error, 'watchWorkspace'),
+                  next: (_previous: WorkspaceWatchValue | undefined, value: WorkspaceWatchValue) =>
+                    Effect.succeed(value),
+                })
                 .pipe(
                   Stream.filter((update) => !('reconnecting' in update)),
                   // Only the value that first says the watch is ready is `ready`; every later

@@ -1,4 +1,5 @@
 import { Effect, PubSub, Stream } from 'effect';
+import type { RpcGroup } from 'effect/rpc';
 import { WindowRpcs } from '../../ipc/window-rpcs.ts';
 import type { WindowLifecycle } from '../window-lifecycle.ts';
 
@@ -20,4 +21,4 @@ export const makeWindowIpcHandlers = (
         }),
       ),
     answerQuit: lifecycle.answerQuit,
-  });
+  } satisfies RpcGroup.HandlersFrom<RpcGroup.Rpcs<typeof WindowRpcs>>);

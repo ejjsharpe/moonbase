@@ -1,6 +1,6 @@
 import * as Schema from 'effect/Schema';
 import { Rpc, RpcGroup } from 'effect/rpc';
-import { array, voidResult } from '@moonbase/contracts/schema';
+import { array, toWireReply } from '@moonbase/contracts/schema';
 import {
   CheckoutTargetSchema,
   WorkspaceEventSchema,
@@ -36,20 +36,17 @@ const error = union([IpcAuthorityError, ...workspaceServiceErrors]);
 const statusError = union([IpcAuthorityError, IpcInputError, ...workspaceServiceErrors]);
 /** A native import: also the native action's own refusals. */
 const importError = union([IpcAuthorityError, NativeActionError, ...workspaceServiceErrors]);
-/** A reply's schema on the wire: no reply is `Schema.Void`, which encodes as JSON. */
-const wire = <S extends Schema.Top>(schema: S) =>
-  (schema === (voidResult as unknown) ? Schema.Void : schema) as S;
 /** A workspace command, a mutation where the file host's operation it runs is one. */
 const command = <const K extends keyof typeof workspaceInputSchemas>(operation: K) =>
   Rpc.make(operation, {
     payload: exact(workspaceInputSchemas[operation]),
-    success: wire(workspaceOutputSchemas[operation]),
+    success: toWireReply(workspaceOutputSchemas[operation]),
     error,
   }).annotate(Mutation, isHostMutation(operation));
 const statusCommand = <const K extends 'operationStatus' | 'acknowledgeOperation'>(operation: K) =>
   Rpc.make(operation, {
     payload: exact(workspaceInputSchemas[operation]),
-    success: wire(workspaceOutputSchemas[operation]),
+    success: toWireReply(workspaceOutputSchemas[operation]),
     error: statusError,
   })
     .annotate(Mutation, isHostMutation(operation))
@@ -57,7 +54,7 @@ const statusCommand = <const K extends 'operationStatus' | 'acknowledgeOperation
 const recovery = <const K extends keyof typeof recoveryInputSchemas>(operation: K) =>
   Rpc.make(operation, {
     payload: exact(recoveryInputSchemas[operation]),
-    success: wire(recoveryOutputSchemas[operation]),
+    success: toWireReply(recoveryOutputSchemas[operation]),
     error,
   });
 const checkout = exact(Schema.Struct({ checkout: CheckoutTargetSchema }));

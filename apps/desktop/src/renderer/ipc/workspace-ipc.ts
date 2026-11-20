@@ -1,15 +1,20 @@
 import { Effect, Layer, Stream } from 'effect';
+import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
 import {
   WorkspaceService,
   type WorkspaceServiceShape,
 } from '@moonbase/contracts/workspace-service';
-import { workspaceInputSchemas } from '@moonbase/contracts/workspace-schema';
-import { recoveryInputSchemas } from '@moonbase/contracts/recovery-schema';
 import type { DesktopIpc } from './desktop-ipc.ts';
 import { callEffect, watchStream, type Payload, type Refusal, type Tag } from './ipc-failures.ts';
 
 const refused: Refusal = 'workspace-request';
-const operations = [...Object.keys(workspaceInputSchemas), ...Object.keys(recoveryInputSchemas)];
+// `WorkspaceService` declares only the workspace's errors (`WorkspaceError`), not desktop IPC's
+// own, which the editor reads by their group (`error-groups`): a procedure's failures pass to it
+// untyped.
+const asPortFailure = <A, E>(effect: Effect.Effect<A, E>) =>
+  effect as Effect.Effect<A, never> as Effect.Effect<A, WorkspaceError>;
+const asPortStreamFailure = <A, E>(stream: Stream.Stream<A, E>) =>
+  stream as Stream.Stream<A, never> as Stream.Stream<A, WorkspaceError>;
 
 /**
  * The renderer's `WorkspaceService`: each command and watch is main's editor procedure over this
@@ -20,14 +25,38 @@ export const WorkspaceIpcLive = Layer.effect(
   WorkspaceService,
   Effect.gen(function* () {
     const context = yield* Effect.context<DesktopIpc>();
-    const call = (tag: string) => (input: unknown) =>
-      callEffect(tag as Tag, input as Payload<Tag>, refused).pipe(Effect.provideContext(context));
+    const call = <T extends Tag>(tag: T, input: Payload<T>) =>
+      asPortFailure(callEffect(tag, input, refused).pipe(Effect.provideContext(context)));
     return {
-      ...Object.fromEntries(operations.map((operation) => [operation, call(operation)])),
-      watch: (input: Parameters<WorkspaceServiceShape['watch']>[0]) =>
-        watchStream('watchWorkspace', input, refused).pipe(Stream.provideContext(context)),
-      watchRecovery: (input: Parameters<WorkspaceServiceShape['watchRecovery']>[0]) =>
-        watchStream('watchRecovery', input, refused).pipe(Stream.provideContext(context)),
-    } as unknown as WorkspaceServiceShape;
+      openCheckout: (input) => call('openCheckout', input),
+      readFile: (input) => call('readFile', input),
+      saveFile: (input) => call('saveFile', input),
+      listDirectory: (input) => call('listDirectory', input),
+      getIgnoredPaths: (input) => call('getIgnoredPaths', input),
+      gitStatus: (input) => call('gitStatus', input),
+      listWorktrees: (input) => call('listWorktrees', input),
+      createWorktree: (input) => call('createWorktree', input),
+      initializeRepository: (input) => call('initializeRepository', input),
+      readComparison: (input) => call('readComparison', input),
+      lookupFiles: (input) => call('lookupFiles', input),
+      searchText: (input) => call('searchText', input),
+      inspectEntries: (input) => call('inspectEntries', input),
+      mutate: (input) => call('mutate', input),
+      operationStatus: (input) => call('operationStatus', input),
+      acknowledgeOperation: (input) => call('acknowledgeOperation', input),
+      loadRecovery: (input) => call('loadRecovery', input),
+      openTab: (input) => call('openTab', input),
+      closeTab: (input) => call('closeTab', input),
+      updateDraft: (input) => call('updateDraft', input),
+      updateLayout: (input) => call('updateLayout', input),
+      watch: (input) =>
+        asPortStreamFailure(
+          watchStream('watchWorkspace', input, refused).pipe(Stream.provideContext(context)),
+        ),
+      watchRecovery: (input) =>
+        asPortStreamFailure(
+          watchStream('watchRecovery', input, refused).pipe(Stream.provideContext(context)),
+        ),
+    } satisfies WorkspaceServiceShape;
   }),
 );

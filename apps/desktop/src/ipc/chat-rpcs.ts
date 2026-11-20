@@ -1,6 +1,6 @@
 import * as Schema from 'effect/Schema';
 import { Rpc, RpcGroup } from 'effect/rpc';
-import { array, optional, struct, voidResult } from '@moonbase/contracts/schema';
+import { array, optional, struct, toWireReply } from '@moonbase/contracts/schema';
 import {
   ChatSessionSchema,
   ChatSnapshotSchema,
@@ -108,12 +108,10 @@ const backendField = { backendId: ChatTargetIdSchema };
 const backend = exact(Schema.Struct(backendField));
 /** A payload of exactly `fields`. */
 const fields = <F extends Schema.Struct.Fields>(fields: F) => exact(Schema.Struct(fields));
-const wire = <S extends Schema.Top>(schema: S) =>
-  (schema === (voidResult as unknown) ? Schema.Void : schema) as S;
 const chat = <const K extends keyof typeof chatInputSchemas>(operation: K) =>
   Rpc.make(operation, {
     payload: fields({ ...backendField, input: chatInputSchemas[operation] }),
-    success: wire(chatOutputSchemas[operation]),
+    success: toWireReply(chatOutputSchemas[operation]),
     error: chatError,
   })
     .annotate(Mutation, isChatMutation(operation))
@@ -127,7 +125,7 @@ const providers = <const K extends keyof typeof providerInputSchemas>(operation:
 const connection = <const K extends keyof typeof connectionInputSchemas>(operation: K) =>
   Rpc.make(operation, {
     payload: fields({ input: connectionInputSchemas[operation] }),
-    success: wire(connectionOutputSchemas[operation]),
+    success: toWireReply(connectionOutputSchemas[operation]),
     error: connectionError,
   });
 

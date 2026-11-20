@@ -1,4 +1,5 @@
 import { Effect, Option, Stream } from 'effect';
+import type { RpcGroup } from 'effect/rpc';
 import type { ChatCommand, ChatInput } from '@moonbase/contracts/chat';
 import type { ConnectionCommand, ConnectionInput } from '@moonbase/contracts/connection';
 import type { ProviderCommand, ProviderInput } from '@moonbase/contracts/providers';
@@ -181,5 +182,5 @@ export function makeChatIpcHandlers(
       }),
     getTranscriptImageUrl: ({ backendId, image }) =>
       Effect.andThen(findTarget(backendId, image), document.targets[backendId].images.issue(image)),
-  });
+  } satisfies RpcGroup.HandlersFrom<RpcGroup.Rpcs<typeof DesktopChatRpcs>>);
 }

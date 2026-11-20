@@ -1,5 +1,6 @@
 import { Clock, Effect, Layer, Option, Ref, Scope, Stream, SubscriptionRef } from 'effect';
 import { RpcClient, RpcSerialization, type Rpc, type RpcGroup } from 'effect/rpc';
+import type { RpcClientError } from 'effect/rpc/RpcClientError';
 import * as Socket from 'effect/socket/Socket';
 import { isUnavailable } from '@moonbase/contracts/error-groups';
 import {
@@ -38,9 +39,11 @@ type ConnectionState =
   | { _tag: 'lost'; error: DaemonLinkError }
   | { _tag: 'closed'; error: DaemonLinkError };
 
+/** A socket's typed RPC client: each procedure of its group, failing too with the transport's error. */
+export type RpcConnectionClient<Rpcs extends Rpc.Any> = RpcClient.RpcClient<Rpcs, RpcClientError>;
 /** One connection generation's link to a socket: its client, and when it may carry a request. */
-export type RpcConnection = {
-  client: Record<string, unknown>;
+export type RpcConnection<Rpcs extends Rpc.Any> = {
+  client: RpcConnectionClient<Rpcs>;
   /**
    * The health of the open socket. While it waits to open again, the next attempt settles it: it
    * fails with why that attempt didn't open, or why it was given up on.
@@ -130,7 +133,7 @@ export const openRpcConnection = <Rpcs extends Rpc.Any>(
   endpoint: VerifiedChatEndpoint,
   isLinkError: (error: unknown) => error is DaemonLinkError,
   onClosed: Effect.Effect<void>,
-): Effect.Effect<RpcConnection, never, Scope.Scope> =>
+): Effect.Effect<RpcConnection<Rpcs>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const state = yield* SubscriptionRef.make<ConnectionState>({
       _tag: 'connecting',
@@ -306,7 +309,7 @@ export const openRpcConnection = <Rpcs extends Rpc.Any>(
         ),
       );
     return {
-      client: client as never,
+      client,
       ready: awaitState(
         (now, current) =>
           now._tag === 'open' || now._tag === 'closed' || (now._tag === 'lost' && !current),

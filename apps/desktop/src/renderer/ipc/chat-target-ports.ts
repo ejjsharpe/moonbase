@@ -1,7 +1,4 @@
 import { Effect, Stream } from 'effect';
-import { chatInputSchemas } from '@moonbase/contracts/chat-schema';
-import { connectionInputSchemas } from '@moonbase/contracts/connection-schema';
-import { providerInputSchemas } from '@moonbase/contracts/providers-schema';
 import type { ChatPort, ConnectionPort, ProviderSetupPort } from '@moonbase/application/chat';
 import type { ChatTargetId } from '../../ipc/chat-rpcs.ts';
 import type { DesktopIpc } from './desktop-ipc.ts';
@@ -15,32 +12,41 @@ const refusedChat: Refusal = 'chat-request';
  */
 export const makeChatTargetPorts = (backendId: ChatTargetId) =>
   Effect.map(Effect.context<DesktopIpc>(), (ipc) => {
-    const call = (tag: string, payload: unknown) =>
-      callEffect(tag as Tag, payload as Payload<Tag>, refusedChat).pipe(Effect.provideContext(ipc));
-    const watch = (tag: string, payload: unknown) =>
-      watchStream(tag as Tag, payload as Payload<Tag>, refusedChat).pipe(
-        Stream.provideContext(ipc),
-      );
-    const commands = (operations: readonly string[], payload: (input: unknown) => unknown) =>
-      Object.fromEntries(
-        operations.map((operation) => [
-          operation,
-          (input: unknown) => call(operation, payload(input)),
-        ]),
-      );
-    const chat = {
-      ...commands(Object.keys(chatInputSchemas), (input) => ({ backendId, input })),
-      watch: ({ target }: { target: unknown }) => watch('watchChat', { backendId, target }),
-      watchChatList: ({ session }: { session: unknown }) =>
-        watch('watchChatList', { backendId, session }),
-    } as unknown as ChatPort;
-    const providers = {
-      ...commands(Object.keys(providerInputSchemas), (input) => ({ backendId, input })),
+    const call = <T extends Tag>(tag: T, payload: Payload<T>) =>
+      callEffect(tag, payload, refusedChat).pipe(Effect.provideContext(ipc));
+    const watch = <T extends Tag>(tag: T, payload: Payload<T>) =>
+      watchStream(tag, payload, refusedChat).pipe(Stream.provideContext(ipc));
+    const chat: ChatPort = {
+      getChatHost: (input) => call('getChatHost', { backendId, input }),
+      listChats: (input) => call('listChats', { backendId, input }),
+      createChat: (input) => call('createChat', { backendId, input }),
+      getChat: (input) => call('getChat', { backendId, input }),
+      getChatHistory: (input) => call('getChatHistory', { backendId, input }),
+      getChatTranscriptContent: (input) => call('getChatTranscriptContent', { backendId, input }),
+      findChatTranscript: (input) => call('findChatTranscript', { backendId, input }),
+      getChatHistoryAround: (input) => call('getChatHistoryAround', { backendId, input }),
+      sendChat: (input) => call('sendChat', { backendId, input }),
+      getChatSend: (input) => call('getChatSend', { backendId, input }),
+      stopChat: (input) => call('stopChat', { backendId, input }),
+      settleChat: (input) => call('settleChat', { backendId, input }),
+      findChatFiles: (input) => call('findChatFiles', { backendId, input }),
+      watch: ({ target }) => watch('watchChat', { backendId, target }),
+      watchChatList: ({ session }) => watch('watchChatList', { backendId, session }),
+    };
+    const providers: ProviderSetupPort = {
+      getProviders: (input) => call('getProviders', { backendId, input }),
+      startProviderLogin: (input) => call('startProviderLogin', { backendId, input }),
+      answerProviderPrompt: (input) => call('answerProviderPrompt', { backendId, input }),
+      cancelProviderLogin: (input) => call('cancelProviderLogin', { backendId, input }),
+      openProviderUrl: (input) => call('openProviderUrl', { backendId, input }),
+      logoutProvider: (input) => call('logoutProvider', { backendId, input }),
       watch: () => watch('watchProviders', { backendId }),
-    } as unknown as ProviderSetupPort;
-    const connection = {
-      ...commands(Object.keys(connectionInputSchemas), (input) => ({ input })),
+    };
+    const connection: ConnectionPort = {
+      getConnection: (input) => call('getConnection', { input }),
+      connect: (input) => call('connect', { input }),
+      disconnect: (input) => call('disconnect', { input }),
       watch: () => watch('watchConnection', undefined),
-    } as unknown as ConnectionPort;
+    };
     return { chat, providers, connection };
   });
