@@ -36,8 +36,7 @@ import {
 } from '@moonbase/contracts/workspace-host-errors';
 import { decodeHostInput, hostInputCheckout } from '@moonbase/contracts/workspace-host-schema';
 import { hostDeadlineMs, isHostStatusCall, WorkspaceRpcs } from '@moonbase/contracts/workspace-rpc';
-import type { RpcConnectionClient } from './rpc-connection.ts';
-import { makeRpcLink } from './rpc-link.ts';
+import { makeRpcLink, type ProcedureClient } from './rpc-link.ts';
 
 /** The client's own text for a refusal a host recorded, by its kind. */
 const recordedRefusals = {
@@ -100,7 +99,7 @@ export function presentWorkspaceError(
   }
 }
 
-type Client = RpcConnectionClient<RpcGroup.Rpcs<typeof WorkspaceRpcs>>;
+type WorkspaceRpc = RpcGroup.Rpcs<typeof WorkspaceRpcs>;
 
 /** Operations whose reply names a checkout: one they made or opened. */
 const checkoutMakers: ReadonlySet<string> = new Set<HostCommand>([
@@ -185,7 +184,7 @@ export const RemoteWorkspaceHostLive = (config: {
         <K extends HostCommand, E extends WorkspaceHostError | RpcClientError>(
           operation: K,
           request: (
-            client: Client,
+            client: ProcedureClient<WorkspaceRpc, K>,
             payload: { host: ChatHostTarget; input: HostInput<K> },
           ) => Effect.Effect<HostOutput<K>, E>,
         ) =>

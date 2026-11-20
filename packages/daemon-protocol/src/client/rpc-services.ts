@@ -26,9 +26,8 @@ import {
   type DaemonRpc,
   type RemoteError,
 } from './daemon-rpc-link.ts';
-import type { RpcConnectionClient } from './rpc-connection.ts';
+import type { ProcedureClient } from './rpc-link.ts';
 
-type Client = RpcConnectionClient<DaemonRpc>;
 /** What a daemon procedure's client fails with: the errors it declares, or the transport's. */
 type SentError = RemoteError | RpcClientError;
 const invalidReply = () => new IncompatibleHostError({ reason: 'invalid-reply' });
@@ -43,7 +42,7 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, DaemonRpcLink> = La
       <K extends ChatCommand, E extends SentError>(
         operation: K,
         send: (
-          client: Client,
+          client: ProcedureClient<DaemonRpc, K>,
           payload: { host: ChatHostTarget; input: ChatInput<K> },
         ) => Effect.Effect<ChatOutput<K>, E>,
       ) =>
@@ -140,7 +139,7 @@ const sendDaemonCommand = <K extends DaemonCommand, A extends DaemonOutput<K>, E
   operation: K,
   input: DaemonInput<K>,
   send: (
-    client: Client,
+    client: ProcedureClient<DaemonRpc, K>,
     payload: { host: ChatHostTarget; input: DaemonInput<K> },
   ) => Effect.Effect<A, E>,
   check?: (output: A) => Effect.Effect<void, IncompatibleHostError>,

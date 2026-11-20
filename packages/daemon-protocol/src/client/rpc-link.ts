@@ -78,15 +78,23 @@ export type FollowOptions<U, E, A, P, C> = {
   next(previous: A | undefined, update: U): Effect.Effect<A, C>;
 };
 /**
+ * The connection's typed client as one procedure's request sees it: only the method its tag names,
+ * so the procedure a request sends is the one whose metadata (a mutation or not) the link reads.
+ */
+export type ProcedureClient<Rpcs extends Rpc.Any, K extends Rpc.Tag<Rpcs>> = Pick<
+  RpcConnectionClient<Rpcs>,
+  K
+>;
+/**
  * A link to one socket of a host's daemon: `call` sends one request and `follow` follows a watch,
  * each through the connection's typed client.
  */
 export interface RpcLink<Rpcs extends Rpc.Any> {
   readonly host: ChatHostTarget;
   /** Sends one request; it fails with the errors its procedure declares, or the link's own. */
-  call<A, E, P, C = never>(
-    operation: Rpc.Tag<Rpcs>,
-    send: (client: RpcConnectionClient<Rpcs>) => Effect.Effect<A, E>,
+  call<K extends Rpc.Tag<Rpcs>, A, E, P, C = never>(
+    operation: K,
+    send: (client: ProcedureClient<Rpcs, K>) => Effect.Effect<A, E>,
     options: CallOptions<A, E, P, C>,
   ): Effect.Effect<A, P | C | DaemonLinkError>;
   /**
@@ -96,9 +104,9 @@ export interface RpcLink<Rpcs extends Rpc.Any> {
    * when the daemon ends it otherwise, the connection generation changes, the connection is
    * given up on or the schedule runs out.
    */
-  follow<U, E, A, P, C = never>(
-    operation: Rpc.Tag<Rpcs>,
-    subscribe: (client: RpcConnectionClient<Rpcs>) => Stream.Stream<U, E>,
+  follow<K extends Rpc.Tag<Rpcs>, U, E, A, P, C = never>(
+    operation: K,
+    subscribe: (client: ProcedureClient<Rpcs, K>) => Stream.Stream<U, E>,
     options: FollowOptions<U, E, A, P, C>,
   ): Stream.Stream<WatchUpdate<A>, P | C | DaemonLinkError>;
 }
@@ -350,9 +358,9 @@ export const makeRpcLink = <Rpcs extends Procedure>(
         return output;
       });
 
-    const follow = <U, E, A, P, C>(
-      operation: Rpc.Tag<Rpcs>,
-      subscribe: (client: RpcConnectionClient<Rpcs>) => Stream.Stream<U, E>,
+    const follow = <K extends Rpc.Tag<Rpcs>, U, E, A, P, C>(
+      operation: K,
+      subscribe: (client: ProcedureClient<Rpcs, K>) => Stream.Stream<U, E>,
       options: FollowOptions<U, E, A, P, C>,
     ) =>
       Stream.callback<WatchUpdate<A>, P | C | DaemonLinkError>(

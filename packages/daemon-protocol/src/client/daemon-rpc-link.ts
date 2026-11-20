@@ -18,8 +18,7 @@ import {
   type WatchValue,
 } from '@moonbase/contracts/watch';
 import { decodeWatchValue } from '@moonbase/contracts/watch-schema';
-import { makeRpcLink, type RpcLink } from './rpc-link.ts';
-import type { RpcConnectionClient } from './rpc-connection.ts';
+import { makeRpcLink, type ProcedureClient, type RpcLink } from './rpc-link.ts';
 
 /** Every procedure a daemon may serve over RPC. */
 export const DaemonRpcs = ChatRpcs.merge(LocalHostRpcs, ProviderSetupRpcs);
@@ -83,33 +82,41 @@ const invalidUpdate = () => new IncompatibleHostError({ reason: 'invalid-update'
  * Follows a daemon watch: its updates applied to the value they describe, the value a delta makes
  * decoded and each value checked. A resubscription after a drop starts from a fresh value.
  */
-export const followWatch = <K extends WatchKind, E extends RemoteError | RpcClientError, C = never>(
+export const followWatch = <
+  T extends Rpc.Tag<DaemonRpc>,
+  K extends WatchKind,
+  E extends RemoteError | RpcClientError,
+  C = never,
+>(
   link: RpcLink<DaemonRpc>,
-  operation: Rpc.Tag<DaemonRpc>,
+  operation: T,
   kind: K,
-  subscribe: (client: RpcConnectionClient<DaemonRpc>) => Stream.Stream<Update<K>, E>,
+  subscribe: (client: ProcedureClient<DaemonRpc, T>) => Stream.Stream<Update<K>, E>,
   options: { capability: string; check?: (value: WatchValue<K>) => Effect.Effect<void, C> },
 ) =>
-  link.follow<Update<K>, E, WatchValue<K>, Exclude<E, RpcClientError>, C | IncompatibleHostError>(
-    operation,
-    subscribe,
-    {
-      capability: options.capability,
-      present: (error) => presentRemoteError(error, operation),
-      next: (previous, update) =>
-        Effect.gen(function* () {
-          if (update.kind === 'delta' && previous === undefined)
-            return yield* Effect.fail(invalidUpdate());
-          // A snapshot was decoded as it arrived; the value a delta makes is new.
-          const value =
-            update.kind === 'snapshot'
-              ? update.value
-              : yield* Effect.try({
-                  try: () => decodeWatchValue(kind, applyWatchDelta(kind, previous!, update.delta)),
-                  catch: invalidUpdate,
-                });
-          if (options.check) yield* options.check(value);
-          return value;
-        }),
-    },
-  );
+  link.follow<
+    T,
+    Update<K>,
+    E,
+    WatchValue<K>,
+    Exclude<E, RpcClientError>,
+    C | IncompatibleHostError
+  >(operation, subscribe, {
+    capability: options.capability,
+    present: (error) => presentRemoteError(error, operation),
+    next: (previous, update) =>
+      Effect.gen(function* () {
+        if (update.kind === 'delta' && previous === undefined)
+          return yield* Effect.fail(invalidUpdate());
+        // A snapshot was decoded as it arrived; the value a delta makes is new.
+        const value =
+          update.kind === 'snapshot'
+            ? update.value
+            : yield* Effect.try({
+                try: () => decodeWatchValue(kind, applyWatchDelta(kind, previous!, update.delta)),
+                catch: invalidUpdate,
+              });
+        if (options.check) yield* options.check(value);
+        return value;
+      }),
+  });
