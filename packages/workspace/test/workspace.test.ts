@@ -723,6 +723,35 @@ test('unsubscribe during pending workspace/watch acquisition and concurrent runt
   }
 });
 
+test('the host caps open watches and frees a slot when a watch closes', async () => {
+  const f = fixture();
+  const stops: (() => Promise<void>)[] = [];
+  const watch = () =>
+    new Promise<unknown>((settle) => {
+      stops.push(
+        f.client.watch(
+          { checkout, paths: [''] },
+          (event) => event.ready && settle(undefined),
+          settle,
+        ),
+      );
+    });
+  const isWatchLimit = (error: unknown) =>
+    (error as { problem?: unknown } | undefined)?.problem === 'watch-limit';
+  let checkout!: Awaited<ReturnType<typeof f.client.command<'openCheckout'>>>;
+  try {
+    checkout = await f.client.command('openCheckout', { root: f.root });
+    const opened = await Promise.all(Array.from({ length: 64 }, watch));
+    assert(opened.every((outcome) => outcome === undefined));
+    assert(isWatchLimit(await watch()));
+    await stops[0]();
+    assert.equal(await watch(), undefined);
+  } finally {
+    for (const stop of stops) await stop().catch(() => {});
+    await f.close();
+  }
+});
+
 test('native assets in packaged resource paths run with restricted PATH and no provider startup dependency', async () => {
   const { fileURLToPath } = await import('node:url'),
     { copyFileSync } = await import('node:fs');
