@@ -1,18 +1,4 @@
-import {
-  Cause,
-  Context,
-  Deferred,
-  Duration,
-  Effect,
-  Exit,
-  Layer,
-  Queue,
-  Ref,
-  Schedule,
-  Scope,
-  Sink,
-  Stream,
-} from 'effect';
+import { Cause, Context, Deferred, Effect, Exit, Layer, Ref, Scope, Stream } from 'effect';
 import {
   CheckoutChangedError,
   InvalidPathError,
@@ -24,10 +10,9 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { WorkspaceFailure } from '../attempt.ts';
 import { systemCall } from '../system-failures.ts';
 import { errorText, requirePath, same } from '../validation.ts';
+import { type Batch, type Change, makeChangeFeed } from './change-feed.ts';
 import { Checkouts } from './checkouts.ts';
 
-/** A watch reports at most one event this often. */
-const observationInterval = Duration.millis(100);
 /** The most watches the host keeps open at once, and the most folders one may name. */
 const maximumWatches = 64,
   maximumPaths = 128;
@@ -93,20 +78,6 @@ function isOtherWorktreeChange(
   );
 }
 
-/** What one native watcher reported: a changed path (unnamed when it could not say), or a failure. */
-type Change = { readonly path: string | undefined } | { readonly error: string };
-
-/** The changes of one 100 ms window. `paths` is undefined once a change could not name its path. */
-type Batch = { readonly paths: Set<string> | undefined; readonly error: string | undefined };
-
-/** Folds a change into its window; the latest failure wins. */
-const addChange = (batch: Batch, change: Change): Batch => {
-  if ('error' in change) return { paths: undefined, error: change.error };
-  if (change.path === undefined) return { ...batch, paths: undefined };
-  batch.paths?.add(change.path);
-  return batch;
-};
-
 /** The host's checkout watches, at most one event every 100 ms per watch. */
 export class WorkspaceObservations extends Context.Service<
   WorkspaceObservations,
@@ -138,17 +109,17 @@ export class WorkspaceObservations extends Context.Service<
         ),
         () => Ref.update(subscriptions, (count) => count - 1),
       );
-      /** Opens a recursive native watcher on `path` for the rest of `scope`, reporting into `changes`. */
-      const openWatcher = (path: string, changes: Queue.Queue<Change>, scope: Scope.Scope) =>
+      /** Opens a recursive native watcher on `path` for the rest of `scope`, reporting to `offer`. */
+      const openWatcher = (path: string, offer: (change: Change) => void, scope: Scope.Scope) =>
         Effect.acquireRelease(
           systemCall(() => {
             const closed = Deferred.makeUnsafe<void>();
             const watcher = fs
               .watch(path, { persistent: false, recursive: true }, (_kind, name) =>
-                Queue.offerUnsafe(changes, { path: name ? resolve(path, name) : undefined }),
+                offer({ path: name ? resolve(path, name) : undefined }),
               )
               .on('error', (error) => {
-                Queue.offerUnsafe(changes, { error: errorText(error) });
+                offer({ error: errorText(error) });
                 // Node stops a failed watcher without guaranteeing a later close event.
                 Deferred.doneUnsafe(closed, Effect.void);
               });
@@ -184,8 +155,8 @@ export class WorkspaceObservations extends Context.Service<
                 (scope) => Scope.close(scope, Exit.void),
               );
               // Shut down with the watchers, so a host closing first also ends the stream.
-              const changes = yield* Queue.unbounded<Change>();
-              yield* Scope.addFinalizer(scope, Queue.shutdown(changes));
+              const feed = yield* makeChangeFeed();
+              yield* Scope.addFinalizer(scope, feed.shutdown);
               const directory = yield* checkouts.directory(input.checkout);
               const common = (yield* checkouts.approval(input.checkout)).common?.path;
               for (const p of new Set(input.paths)) {
@@ -195,13 +166,13 @@ export class WorkspaceObservations extends Context.Service<
                 const before = yield* directory.entry(p);
                 if (!before.directory)
                   return yield* new InvalidPathError({ problem: 'watch-not-folder' });
-                yield* openWatcher(resolve(directory.root, p), changes, scope);
+                yield* openWatcher(resolve(directory.root, p), feed.offer, scope);
                 const after = yield* directory.entry(p);
                 if (!same(before, after))
                   return yield* new CheckoutChangedError({ change: 'watch-directory' });
               }
               if (common && !common.startsWith(directory.root + '/'))
-                yield* openWatcher(common, changes, scope);
+                yield* openWatcher(common, feed.offer, scope);
               /** The event for one window, or undefined when nothing in it can affect this checkout. */
               const publish = Effect.fnUntraced(function* ({ paths, error }: Batch) {
                 // Agents in other worktrees run Git and write files constantly; only changes
@@ -226,13 +197,7 @@ export class WorkspaceObservations extends Context.Service<
                 };
                 return event;
               });
-              // A window opens with its first change (a checkout writes many files) and gathers
-              // the rest for 100 ms; changes meanwhile wait for the next one.
-              const events = Stream.fromQueue(changes).pipe(
-                Stream.aggregateWithin(
-                  Sink.reduce((): Batch => ({ paths: new Set(), error: undefined }), addChange),
-                  Schedule.spaced(observationInterval),
-                ),
+              const events = feed.batches.pipe(
                 Stream.mapEffect(publish),
                 Stream.filter((event) => event !== undefined),
               );
