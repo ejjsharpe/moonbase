@@ -13,7 +13,7 @@ import {
   Mutation,
   StatusCall,
 } from './rpc-annotations.ts';
-import { voidResult } from './schema.ts';
+import { toWireReply } from './schema.ts';
 import { fileHostErrors } from './workspace-host-errors.ts';
 import {
   hostInputSchemas,
@@ -47,14 +47,11 @@ const WorkspaceErrorSchema = Schema.Union(workspaceErrors),
 export const workspaceErrorSchemaOf = (operation: HostCommand | 'watchWorkspace') =>
   operation === 'turnChatIntoProject' ? ChatProjectErrorSchema : WorkspaceErrorSchema;
 
-/** A reply's schema on the wire: no reply is `Schema.Void`, which encodes as JSON. */
-const wire = <S extends Schema.Top>(schema: S) =>
-  (schema === (voidResult as unknown) ? Schema.Void : schema) as S;
 /** One request: the host it is for, named at the top level, and the operation's input. */
 const call = <const K extends HostCommand>(operation: K) =>
   Rpc.make(operation, {
     payload: { host: ChatHostTargetSchema, input: hostInputSchemas[operation] },
-    success: wire(hostOutputSchemas[operation]),
+    success: toWireReply(hostOutputSchemas[operation]),
     error: workspaceErrorSchemaOf(operation),
   });
 

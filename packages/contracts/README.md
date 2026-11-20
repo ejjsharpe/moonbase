@@ -6,7 +6,7 @@
 
 | Subpaths | What they give |
 | --- | --- |
-| `chat`, `chat-schema`, `chat-rpc`, `chat-validation`, `chat-errors` | Chat DTOs and commands, their decoders, `ChatRpcs`, `checkChatOutput` (a reply's decoding, authority and size check, run once by the client that receives it) and the chat errors |
+| `chat`, `chat-schema`, `chat-rpc`, `chat-validation`, `chat-errors` | Chat DTOs and commands, their decoders, `ChatRpcs`, `checkChatOutput` (an Effect checking a decoded reply echoes its request, stays within its authority and fits the reply limit) and the chat errors |
 | `workspace`, `workspace-schema`, `workspace-service` | The client-facing workspace: targets (`CheckoutTarget`, plain folder or Git), files, Git, operations, limits such as `maximumFileBytes`, and the `WorkspaceService` port |
 | `workspace-host`, `workspace-host-schema`, `workspace-rpc`, `workspace-host-errors`, `workspace-errors` | The file host's commands (journalled by installation, client and request ID), `WorkspaceRpcs`, the host's errors (`WorkspaceHostError`) and the client's (`WorkspaceError`) |
 | `recovery`, `recovery-schema` | The client recovery store's buffer-keyed format (`RecoveryState`, `RecoveryOutline`), `loadRecovery` and its edits |

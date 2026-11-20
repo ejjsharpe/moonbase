@@ -1,5 +1,5 @@
 import * as Schema from 'effect/Schema';
-import { voidResult } from './schema.ts';
+import { toWireReply } from './schema.ts';
 import { Rpc, RpcGroup } from 'effect/rpc';
 import {
   ChatAccessError,
@@ -75,19 +75,16 @@ export const daemonErrorSchemas = {
   watchProviderSetup: ProviderReadErrorSchema,
 } satisfies Record<DaemonCommand | 'watchProviderSetup', unknown>;
 const request = <S extends Schema.Top>(input: S) => ({ host: ChatHostTargetSchema, input });
-/** A reply's schema on the wire: no reply is `Schema.Void`, which encodes as JSON. */
-const wire = <S extends Schema.Top>(schema: S) =>
-  (schema === (voidResult as unknown) ? Schema.Void : schema) as S;
 const localHost = <const K extends keyof typeof localHostInputSchemas>(operation: K) =>
   Rpc.make(operation, {
     payload: request(localHostInputSchemas[operation]),
-    success: wire(localHostOutputSchemas[operation]),
+    success: toWireReply(localHostOutputSchemas[operation]),
     error: daemonErrorSchemas[operation],
   });
 const providers = <const K extends keyof typeof hostProviderInputSchemas>(operation: K) =>
   Rpc.make(operation, {
     payload: request(hostProviderInputSchemas[operation]),
-    success: wire(hostProviderOutputSchemas[operation]),
+    success: toWireReply(hostProviderOutputSchemas[operation]),
     error: daemonErrorSchemas[operation],
   });
 export const ProviderSetupUpdateSchema = Schema.Union([

@@ -8,14 +8,37 @@ import { isStatusRpc } from '@moonbase/contracts/rpc-annotations';
 import { rpcLimits, workspaceRpcLimits } from '@moonbase/contracts/rpc-upgrade';
 import { HostUnavailableError } from '@moonbase/contracts/host-errors';
 import { WorkspaceRpcs } from '@moonbase/contracts/workspace-rpc';
+import type { ChatHostTarget } from '@moonbase/contracts/host';
+import {
+  ChatService,
+  LocalHostService,
+  ProviderSetupService,
+  WorkspaceHostService,
+  type ChatServiceShape,
+  type LocalHostHandlers,
+  type WorkspaceHostServiceShape,
+} from '@moonbase/contracts/services';
 import { makeMutationReplay } from './mutation-replay.ts';
-import { makeChatHandlers, makeDaemonHandlers, type RpcServices } from './rpc-handlers.ts';
+import {
+  makeChatHandlers,
+  makeLocalHostHandlers,
+  makeProviderSetupHandlers,
+  type ServedHost,
+} from './rpc-handlers.ts';
 import {
   makeRpcConnections,
   rpcSocketServerLayer,
   type RpcConnectionOptions,
 } from './rpc-connections.ts';
-import { makeWorkspaceHandlers, type WorkspaceRpcServices } from './workspace-handlers.ts';
+import { makeWorkspaceHandlers } from './workspace-handlers.ts';
+
+/** The services one daemon serves over RPC, for the host its health signs. */
+export type RpcServices = ServedHost & {
+  chat: ChatServiceShape;
+  daemon?: { localHost: LocalHostHandlers; providers: ProviderSetupService['Service'] };
+};
+/** The file host a daemon serves on the workspace's socket, and the host it serves for. */
+export type WorkspaceRpcServices = { host: ChatHostTarget; workspace: WorkspaceHostServiceShape };
 
 export type RpcServerOptions = {
   /**
@@ -142,23 +165,24 @@ export const serveRpc = (services: RpcServices, options: RpcServerOptions) =>
       protocol,
       Layer.succeed(RpcAdmission, makeAdmission(options, rpcLimits)),
     ] as const;
-    const chat = ChatRpcs.toLayer(makeChatHandlers(services));
+    const chat = ChatRpcs.toLayer(makeChatHandlers(services)).pipe(
+      Layer.provide(Layer.succeed(ChatService, services.chat)),
+    );
     const replay = yield* makeMutationReplay;
-    const server = services.daemon
-      ? (() => {
-          const { local, providers } = makeDaemonHandlers(services, replay);
-          return RpcServer.layer(
-            ChatRpcs.merge(LocalHostRpcs, ProviderSetupRpcs),
-            serverOptions,
-          ).pipe(
-            Layer.provide([
-              chat,
-              LocalHostRpcs.toLayer(local),
-              ProviderSetupRpcs.toLayer(providers),
-              ...shared,
-            ]),
-          );
-        })()
+    const { daemon } = services;
+    const server = daemon
+      ? RpcServer.layer(ChatRpcs.merge(LocalHostRpcs, ProviderSetupRpcs), serverOptions).pipe(
+          Layer.provide([
+            chat,
+            LocalHostRpcs.toLayer(makeLocalHostHandlers(services, replay)).pipe(
+              Layer.provide(Layer.succeed(LocalHostService, daemon.localHost)),
+            ),
+            ProviderSetupRpcs.toLayer(makeProviderSetupHandlers(services, replay)).pipe(
+              Layer.provide(Layer.succeed(ProviderSetupService, daemon.providers)),
+            ),
+            ...shared,
+          ]),
+        )
       : RpcServer.layer(ChatRpcs, serverOptions).pipe(Layer.provide([chat, ...shared]));
     yield* Layer.build(server);
     return connections;
@@ -189,7 +213,9 @@ export const serveWorkspaceRpc = (
     yield* Layer.build(
       RpcServer.layer(WorkspaceRpcs, serverOptions).pipe(
         Layer.provide([
-          WorkspaceRpcs.toLayer(makeWorkspaceHandlers(services)),
+          WorkspaceRpcs.toLayer(makeWorkspaceHandlers(services)).pipe(
+            Layer.provide(Layer.succeed(WorkspaceHostService, services.workspace)),
+          ),
           protocol,
           Layer.succeed(RpcAdmission, admission),
         ]),

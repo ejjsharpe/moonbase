@@ -1,7 +1,7 @@
+import { Effect } from 'effect';
 import { areJsonValuesEqual } from './common.ts';
 import { InvalidChatRequestError } from './chat-errors.ts';
 import { IncompatibleHostError } from './host-errors.ts';
-import { decodeChatOutput } from './chat-schema.ts';
 import {
   maximumChatReplyBytes,
   type ChatTranscript,
@@ -29,29 +29,31 @@ export const isCancellableChatRead = (operation: ChatCommand) =>
   operation === 'getChatHistoryAround' ||
   operation === 'findChatTranscript' ||
   operation === 'findChatFiles';
+const replyLimit = () => new InvalidChatRequestError({ problem: 'reply-limit' });
 export function checkChatReplySize<T>(value: T): T {
   if (new TextEncoder().encode(JSON.stringify(value)).length > maximumChatReplyBytes - 256)
-    throw new InvalidChatRequestError({ problem: 'reply-limit' });
+    throw replyLimit();
   return value;
 }
-const invalidReply = () => new IncompatibleHostError({ reason: 'invalid-reply' });
-/** Decodes a chat reply from the wire and checks it answers the request; schemas grant no remote authority. */
-export function checkChatOutput<K extends ChatCommand>(
+/**
+ * Whether a decoded chat reply answers its request: it echoes what the request named and stays
+ * within the host and actor the request is for. Schemas grant no remote authority.
+ */
+function answersChatRequest<K extends ChatCommand>(
   operation: K,
-  value: unknown,
+  result: ChatOutput<K>,
   request: ChatInput<K>,
-): ChatOutput<K> {
-  const result = decodeChatOutput(operation, value);
+): boolean {
   if (operation === 'getChat') {
     const snapshot = result as ChatSnapshot;
     if (snapshot.run && !isSameChatTarget(snapshot.run.stop.target, snapshot.conversation.target))
-      throw invalidReply();
+      return false;
   }
   const r = result as Record<string, unknown> | null,
     q = request as Record<string, unknown>;
   const requestedSession = q.session as ChatSession | undefined;
   if (operation === 'findChatFiles') {
-    if (r!.query !== q.query) throw invalidReply();
+    if (r!.query !== q.query) return false;
   } else if (requestedSession) {
     const summaries =
       operation === 'listChats'
@@ -64,22 +66,18 @@ export function checkChatOutput<K extends ChatCommand>(
           s.target.actorId !== requestedSession.actorId,
       )
     )
-      throw invalidReply();
+      return false;
   }
   if (
     operation === 'getChatHost' &&
     !isSameChatHost(r!.host as ChatHostTarget, q.host as ChatHostTarget)
   )
-    throw invalidReply();
-  const validateTranscript = (transcript: ChatTranscript, target: ChatTarget, id?: string) => {
-    if (
-      !isSameChatTarget(transcript.source.target, target) ||
-      (id !== undefined && (transcript.source.kind !== 'entry' || transcript.source.entryId !== id))
-    )
-      throw invalidReply();
-    if (new Set(transcript.parts.map((part) => part.partId)).size !== transcript.parts.length)
-      throw invalidReply();
-  };
+    return false;
+  const isTranscriptOf = (transcript: ChatTranscript, target: ChatTarget, id?: string) =>
+    isSameChatTarget(transcript.source.target, target) &&
+    (id === undefined ||
+      (transcript.source.kind === 'entry' && transcript.source.entryId === id)) &&
+    new Set(transcript.parts.map((part) => part.partId)).size === transcript.parts.length;
   if (
     operation === 'getChat' ||
     operation === 'getChatHistoryAround' ||
@@ -87,18 +85,18 @@ export function checkChatOutput<K extends ChatCommand>(
   ) {
     const target = q.target as ChatTarget;
     for (const entry of r!.entries as ChatSnapshot['entries'])
-      if (entry.transcript) validateTranscript(entry.transcript, target, entry.id);
+      if (entry.transcript && !isTranscriptOf(entry.transcript, target, entry.id)) return false;
     if (operation === 'getChat') {
       const run = (result as ChatSnapshot).run;
       if (run?.transcript) {
-        validateTranscript(run.transcript, target);
+        if (!isTranscriptOf(run.transcript, target)) return false;
         const source = run.transcript.source;
         if (
           source.kind !== 'live' ||
           source.submissionId !== run.stop.submissionId ||
           source.taskId !== run.stop.taskId
         )
-          throw invalidReply();
+          return false;
       }
     }
   }
@@ -110,22 +108,21 @@ export function checkChatOutput<K extends ChatCommand>(
       data.cursor !== (input.cursor ?? null) ||
       data.matches.some((match) => !isSameChatTarget(match.source.target, input.target))
     )
-      throw invalidReply();
+      return false;
   }
   if (operation === 'getChatHistoryAround') {
-    if (r!.entryId !== q.entryId || r!.cursor !== (q.cursor ?? null)) throw invalidReply();
+    if (r!.entryId !== q.entryId || r!.cursor !== (q.cursor ?? null)) return false;
   }
   if (operation === 'getChatTranscriptContent') {
     const data = result as ChatOutput<'getChatTranscriptContent'>;
     const input = request as ChatInput<'getChatTranscriptContent'>;
     if (!areJsonValuesEqual(data.source, input.source) || data.cursor !== (input.cursor ?? null))
-      throw invalidReply();
+      return false;
     if (data.kind === 'manifest') {
-      if (input.selection) throw invalidReply();
-      validateTranscript(data, input.source.target);
+      if (input.selection) return false;
+      if (!isTranscriptOf(data, input.source.target)) return false;
     } else {
-      if (!input.selection || !areJsonValuesEqual(data.selection, input.selection))
-        throw invalidReply();
+      if (!input.selection || !areJsonValuesEqual(data.selection, input.selection)) return false;
     }
   }
   if (q.target && r) {
@@ -133,10 +130,25 @@ export function checkChatOutput<K extends ChatCommand>(
       operation === 'getChat'
         ? (r.conversation as ChatSummary).target
         : (r.target as ChatTarget | undefined);
-    if (actual && !isSameChatTarget(actual, q.target as ChatTarget)) throw invalidReply();
+    if (actual && !isSameChatTarget(actual, q.target as ChatTarget)) return false;
   }
-  if (q.requestId && r?.requestId !== undefined && q.requestId !== r.requestId)
-    throw invalidReply();
-  if (operation === 'stopChat' && !areJsonValuesEqual(r!.stop, q.stop)) throw invalidReply();
-  return checkChatReplySize(result);
+  if (q.requestId && r?.requestId !== undefined && q.requestId !== r.requestId) return false;
+  if (operation === 'stopChat' && !areJsonValuesEqual(r!.stop, q.stop)) return false;
+  return true;
 }
+
+/**
+ * Checks a chat reply, decoded where it arrived, answers its request and fits the reply limit:
+ * refused `IncompatibleHostError` (`invalid-reply`) or `InvalidChatRequestError` (`reply-limit`).
+ */
+export const checkChatOutput = <K extends ChatCommand>(
+  operation: K,
+  output: ChatOutput<K>,
+  request: ChatInput<K>,
+): Effect.Effect<ChatOutput<K>, IncompatibleHostError | InvalidChatRequestError> =>
+  Effect.suspend(
+    (): Effect.Effect<ChatOutput<K>, IncompatibleHostError | InvalidChatRequestError> =>
+      answersChatRequest(operation, output, request)
+        ? Effect.try({ try: () => checkChatReplySize(output), catch: replyLimit })
+        : Effect.fail(new IncompatibleHostError({ reason: 'invalid-reply' })),
+  );

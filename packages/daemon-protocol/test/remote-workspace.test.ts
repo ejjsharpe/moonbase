@@ -25,7 +25,7 @@ import {
   WorktreeGitError,
 } from '@moonbase/contracts/workspace-host-errors';
 import { UncertainError } from '@moonbase/contracts/errors';
-import { WorkspaceRpcs, workspaceErrorSchemaOf } from '@moonbase/contracts/workspace-rpc';
+import { WorkspaceRpcs } from '@moonbase/contracts/workspace-rpc';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
 import { requestUpgradeNonce } from '../src/health.ts';
 import { DaemonRpcLinkLive, EndpointConnectionLive, RemoteChatLive } from '../src/client/remote.ts';
@@ -175,10 +175,11 @@ test('a call or watch for another host is refused before it is sent and by the d
           path: workspaceRpcPath,
           protocol: workspaceRpcProtocol,
           inboundBytes: workspaceRpcLimits.messageBytes,
-          errors: workspaceErrorSchemaOf('turnChatIntoProject').members as never,
-          present: (error) => error,
         });
-        const capability = chatHostCapabilities.workspace;
+        const options = {
+          capability: chatHostCapabilities.workspace,
+          present: <E>(error: E) => error,
+        };
         const tags: string[] = [];
         const attempt = (effect: Effect.Effect<unknown, unknown>) =>
           Effect.flatMap(Effect.flip(effect), (error) =>
@@ -187,37 +188,39 @@ test('a call or watch for another host is refused before it is sent and by the d
         yield* attempt(
           direct.call(
             'readFile',
-            { host, input: { checkout: foreign, path: 'a.txt' } },
-            { mutation: false, capability },
+            (client) => client.readFile({ host, input: { checkout: foreign, path: 'a.txt' } }),
+            options,
           ),
         );
         yield* attempt(
           direct.call(
             'readFile',
-            { host: { ...host, hostId: 'other-host' }, input: fileTarget },
-            { mutation: false, capability },
+            (client) =>
+              client.readFile({ host: { ...host, hostId: 'other-host' }, input: fileTarget }),
+            options,
           ),
         );
         yield* attempt(
           direct.call(
             'turnChatIntoProject',
-            {
-              host,
-              input: {
-                ...identity,
-                requestId: 'turn',
-                target: { ...target, host: { ...host, hostId: 'other-host' } },
-              },
-            },
-            { mutation: true, capability },
+            (client) =>
+              client.turnChatIntoProject({
+                host,
+                input: {
+                  ...identity,
+                  requestId: 'turn',
+                  target: { ...target, host: { ...host, hostId: 'other-host' } },
+                },
+              }),
+            options,
           ),
         );
         yield* attempt(
           Stream.runDrain(
             direct.follow(
               'watchWorkspace',
-              { host, checkout: foreign },
-              { capability, next: (_, value) => value },
+              (client) => client.watchWorkspace({ host, checkout: foreign }),
+              { ...options, next: (_, value) => Effect.succeed(value) },
             ),
           ),
         );
@@ -499,14 +502,15 @@ test('requests past the input a connection may hold in flight wait unsent on the
           path: workspaceRpcPath,
           protocol: workspaceRpcProtocol,
           inboundBytes: workspaceRpcLimits.messageBytes,
-          errors: workspaceErrorSchemaOf('saveFile').members as never,
-          present: (error) => error,
         });
-        const capability = chatHostCapabilities.workspace;
+        const options = {
+          capability: chatHostCapabilities.workspace,
+          present: <E>(error: E) => error,
+        };
         const read = direct.call(
           'getIgnoredPaths',
-          { host, input },
-          { mutation: false, capability },
+          (client) => client.getIgnoredPaths({ host, input }),
+          options,
         );
         for (let index = 0; index < 2; index++) yield* Effect.forkScoped(Effect.ignore(read));
         yield* Effect.promise(() =>
@@ -518,8 +522,9 @@ test('requests past the input a connection may hold in flight wait unsent on the
         return yield* Effect.flip(
           direct.call(
             'saveFile',
-            { host, input: saveInput('x'.repeat(1024 * 1024), 'save-2') },
-            { mutation: true, capability },
+            (client) =>
+              client.saveFile({ host, input: saveInput('x'.repeat(1024 * 1024), 'save-2') }),
+            options,
           ),
         );
       }),

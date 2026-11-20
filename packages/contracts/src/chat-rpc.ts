@@ -1,5 +1,5 @@
 import * as Schema from 'effect/Schema';
-import { voidResult } from './schema.ts';
+import { toWireReply } from './schema.ts';
 import { Rpc, RpcGroup, RpcSchema } from 'effect/rpc';
 import {
   ChatAccessError,
@@ -55,13 +55,10 @@ const ChatReadErrorSchema = Schema.Union(chatReadErrors),
   ChatMutationErrorSchema = Schema.Union(chatMutationErrors);
 /** One request: the host it is for, named at the top level, and the operation's input. */
 const request = <S extends Schema.Top>(input: S) => ({ host: ChatHostTargetSchema, input });
-/** A reply's schema on the wire: no reply is `Schema.Void`, which encodes as JSON. */
-const wire = <S extends Schema.Top>(schema: S) =>
-  (schema === (voidResult as unknown) ? Schema.Void : schema) as S;
 const procedure = <const K extends ChatCommand, E extends Schema.Top>(operation: K, error: E) =>
   Rpc.make(operation, {
     payload: request(chatInputSchemas[operation]),
-    success: wire(chatOutputSchemas[operation]),
+    success: toWireReply(chatOutputSchemas[operation]),
     error,
   });
 const read = <const K extends ChatCommand>(operation: K) =>

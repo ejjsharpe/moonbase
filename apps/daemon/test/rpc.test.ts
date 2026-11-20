@@ -10,14 +10,13 @@ import type { ProviderState } from '@moonbase/contracts/providers';
 import { Effect, Layer, ManagedRuntime, Stream } from 'effect';
 import type { DaemonCommand, DaemonInput, DaemonOutput } from '@moonbase/contracts/daemon';
 import { daemonCommandCapabilities } from '@moonbase/contracts/daemon-schema';
-import { isDaemonMutation } from '@moonbase/contracts/daemon-rpc';
 import type { ChatCommand, ChatInput } from '@moonbase/contracts/chat';
-import { isChatMutation } from '@moonbase/contracts/chat-rpc';
 import { chatHostCapabilities } from '@moonbase/contracts/host';
 import {
   DaemonRpcLink,
   DaemonRpcLinkLive,
   EndpointConnectionLive,
+  followWatch,
 } from '@moonbase/daemon-protocol/remote';
 import { bounded, readJson, startDaemon, temporaryRoot, until } from './daemon-fixture.ts';
 import { fauxModelId, fauxProviderId, fauxSignInCode } from './faux-provider.ts';
@@ -46,8 +45,11 @@ test('one RPC connection runs every procedure and holds chat, chat-list and prov
         ),
       ),
     );
+    /** A procedure of the daemon's client by name: this test runs each of them. */
+    const procedure = <A>(client: unknown, operation: string) =>
+      (client as Record<string, (payload: object) => A>)[operation]!;
     const subscribe = <K extends 'chat' | 'chatList' | 'providerSetup'>(
-      operation: string,
+      operation: 'watchChat' | 'watchChatList' | 'watchProviderSetup',
       kind: K,
       payload: object,
       receive: (value: never) => void,
@@ -55,7 +57,14 @@ test('one RPC connection runs every procedure and holds chat, chat-list and prov
       runtime.runFork(
         Effect.flatMap(DaemonRpcLink, (link) =>
           Stream.runForEach(
-            link.watch(operation, kind, payload, { capability: chatHostCapabilities.chat }),
+            followWatch(
+              link,
+              operation,
+              kind,
+              // Its updates, as the daemon's client decoded them.
+              (client) => procedure<Stream.Stream<never>>(client, operation)(payload),
+              { capability: chatHostCapabilities.chat },
+            ),
             (update) => Effect.sync(() => 'value' in update && receive(update.value as never)),
           ),
         ).pipe(Effect.catch((error) => Effect.sync(() => failures.push(error)))),
@@ -79,14 +88,12 @@ test('one RPC connection runs every procedure and holds chat, chat-list and prov
           Effect.flatMap(DaemonRpcLink, (link) =>
             link.call(
               operation,
-              { host, input },
+              (client) => procedure<Effect.Effect<unknown>>(client, operation)({ host, input }),
               {
-                mutation: daemon
-                  ? isDaemonMutation(operation as DaemonCommand)
-                  : isChatMutation(operation as ChatCommand),
                 capability: daemon
                   ? daemonCommandCapabilities[operation as DaemonCommand]
                   : chatHostCapabilities.chat,
+                present: (error) => error,
               },
             ),
           ),

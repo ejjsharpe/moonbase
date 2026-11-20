@@ -1,18 +1,16 @@
 import { Effect, Stream } from 'effect';
-import { Rpc } from 'effect/rpc';
-import type { ChatListState } from '@moonbase/contracts/chat';
+import { Rpc, type RpcGroup } from 'effect/rpc';
+import type { ChatCommand, ChatInput, ChatListState } from '@moonbase/contracts/chat';
 import { isCancellableChatRead, isSameChatHost } from '@moonbase/contracts/chat-validation';
-import { chatInputSchemas } from '@moonbase/contracts/chat-schema';
-import {
-  daemonCommandCapabilities,
-  localHostInputSchemas,
-} from '@moonbase/contracts/daemon-schema';
-import type { DaemonCommand } from '@moonbase/contracts/daemon';
+import { daemonCommandCapabilities } from '@moonbase/contracts/daemon-schema';
+import type { DaemonCommand, LocalHostCommand, LocalHostInput } from '@moonbase/contracts/daemon';
 import type { ChatHostHealth, ChatHostTarget } from '@moonbase/contracts/host';
-import type {
-  ChatServiceShape,
-  LocalHostHandlers,
+import {
+  ChatService,
+  LocalHostService,
   ProviderSetupService,
+  type ChatHandlers,
+  type LocalHostHandlers,
 } from '@moonbase/contracts/services';
 import {
   watchDeltaBytes,
@@ -20,50 +18,43 @@ import {
   type WatchKind,
   type WatchValue,
 } from '@moonbase/contracts/watch';
-import type { ChatCommand } from '@moonbase/contracts/chat';
 import { UnauthorizedError } from '@moonbase/contracts/errors';
 import { HostUnavailableError, IncompatibleHostError } from '@moonbase/contracts/host-errors';
-import { chatErrorSchemaOf } from '@moonbase/contracts/chat-rpc';
-import { daemonErrorSchemas, isDaemonMutation } from '@moonbase/contracts/daemon-rpc';
-import type { MutationReplay } from './mutation-replay.ts';
+import { ChatRpcs } from '@moonbase/contracts/chat-rpc';
+import { isDaemonMutation, LocalHostRpcs, ProviderSetupRpcs } from '@moonbase/contracts/daemon-rpc';
+import { declaredErrorsOf, isOneOf, type Procedure } from '../declared-errors.ts';
+import type { MutationInput, MutationReplay } from './mutation-replay.ts';
 import { projectWatchDelta } from './watch-deltas.ts';
 
-/** The services one daemon serves over RPC, and what its health advertises. */
-export type RpcServices = {
-  host: ChatHostTarget;
-  health: ChatHostHealth;
-  chat: ChatServiceShape;
-  daemon?: { localHost: LocalHostHandlers; providers: ProviderSetupService['Service'] };
-};
+/** The host a daemon serves over RPC, and what its health advertises. */
+export type ServedHost = { host: ChatHostTarget; health: ChatHostHealth };
 
 export const notServed = () => new IncompatibleHostError({ reason: 'not-served' });
 /** Refuses a request for another host before its handler runs. */
 export const forHost = (
-  services: { host: ChatHostTarget },
+  served: { host: ChatHostTarget },
   host: ChatHostTarget,
   operation: string,
 ) =>
-  isSameChatHost(host, services.host)
+  isSameChatHost(host, served.host)
     ? Effect.void
     : Effect.fail(new UnauthorizedError({ operation }));
 
 /**
- * A service's failure as its procedure's error union declares it: an error the union names is
- * sent as it is (its tag and fields, never a cause); anything else is the host's own failure.
+ * A service's failure as `operation`'s error union declares it: an error the union names is sent
+ * as it is (its tag and fields, never a cause); anything else is the host's own failure.
  */
-export const toWire =
-  (union: { members: readonly unknown[] }) =>
-  (error: unknown): unknown => {
-    try {
-      if (union.members.some((member) => error instanceof (member as abstract new () => unknown)))
-        return error;
-    } catch {
-      // A value whose prototype can't be read is no error of ours.
-    }
-    return new HostUnavailableError({ reason: 'failed' });
-  };
-const toChatWire = (operation: Parameters<typeof chatErrorSchemaOf>[0]) =>
-  toWire(chatErrorSchemaOf(operation));
+export const toWire = <Rpcs extends Procedure, const Tag extends Rpcs['_tag']>(
+  group: RpcGroup.RpcGroup<Rpcs>,
+  operation: Tag,
+) => {
+  const errors = declaredErrorsOf(group.requests.get(operation)!);
+  return (error: unknown): Rpc.ErrorExit<Rpc.ExtractTag<Rpcs, Tag>> | HostUnavailableError =>
+    // An instance of a class the union names is of its type.
+    isOneOf(errors, error)
+      ? (error as Rpc.ErrorExit<Rpc.ExtractTag<Rpcs, Tag>>)
+      : new HostUnavailableError({ reason: 'failed' });
+};
 
 /** A watch's update: a whole value, or a delta from the last one sent. */
 export type Update<K extends WatchKind> =
@@ -93,146 +84,178 @@ export function toUpdates<K extends WatchKind, E>(
   );
 }
 
+type ChatRpc = RpcGroup.Rpcs<typeof ChatRpcs>;
+
 /**
  * Chat handlers for every procedure, over the chat service: each checks the request's host. A
  * request that changes state, or a read a caller may not abandon, runs to completion once it
  * started, even if its connection drops.
  */
-export function makeChatHandlers(services: RpcServices) {
-  const { chat } = services;
-  const handlers: Record<string, unknown> = {
-    watchChat: ({ host, target }: { host: ChatHostTarget; target: never }) =>
-      Stream.unwrap(
-        Effect.as(forHost(services, host, 'watchChat'), toUpdates('chat', chat.watch({ target }))),
-      ).pipe(Stream.mapError(toChatWire('watchChat'))),
-    watchChatList: ({ host, session }: { host: ChatHostTarget; session: never }) =>
-      Stream.unwrap(
-        Effect.as(
-          forHost(services, host, 'watchChatList'),
-          toUpdates(
-            'chatList',
-            chat.watchChatList({ session }).pipe(
-              Stream.map(({ list, changed, dropped }): ChatListState => ({
-                list,
-                changed,
-                dropped,
-              })),
+export const makeChatHandlers = (served: { host: ChatHostTarget }) =>
+  Effect.gen(function* () {
+    const chat = yield* ChatService;
+    const commands: ChatHandlers = chat;
+    const command =
+      <K extends ChatCommand>(operation: K) =>
+      ({ host, input }: { host: ChatHostTarget; input: ChatInput<K> }) => {
+        const run = Effect.andThen(
+          forHost(served, host, operation),
+          Effect.suspend(() => commands[operation](input)),
+        ).pipe(Effect.mapError(toWire(ChatRpcs, operation)));
+        return isCancellableChatRead(operation) ? run : Rpc.uninterruptible(run);
+      };
+    return {
+      getChatHost: command('getChatHost'),
+      listChats: command('listChats'),
+      createChat: command('createChat'),
+      getChat: command('getChat'),
+      getChatHistory: command('getChatHistory'),
+      getChatTranscriptContent: command('getChatTranscriptContent'),
+      findChatTranscript: command('findChatTranscript'),
+      getChatHistoryAround: command('getChatHistoryAround'),
+      sendChat: command('sendChat'),
+      getChatSend: command('getChatSend'),
+      stopChat: command('stopChat'),
+      settleChat: command('settleChat'),
+      findChatFiles: command('findChatFiles'),
+      watchChat: ({ host, target }) =>
+        Stream.unwrap(
+          Effect.as(forHost(served, host, 'watchChat'), toUpdates('chat', chat.watch({ target }))),
+        ).pipe(Stream.mapError(toWire(ChatRpcs, 'watchChat'))),
+      watchChatList: ({ host, session }) =>
+        Stream.unwrap(
+          Effect.as(
+            forHost(served, host, 'watchChatList'),
+            toUpdates(
+              'chatList',
+              chat.watchChatList({ session }).pipe(
+                Stream.map(({ list, changed, dropped }): ChatListState => ({
+                  list,
+                  changed,
+                  dropped,
+                })),
+              ),
             ),
           ),
-        ),
-      ).pipe(Stream.mapError(toChatWire('watchChatList'))),
-  };
-  for (const operation of Object.keys(chatInputSchemas) as ChatCommand[]) {
-    handlers[operation] = ({ host, input }: { host: ChatHostTarget; input: never }) => {
-      const run = Effect.andThen(
-        forHost(services, host, operation),
-        Effect.suspend(() =>
-          (chat[operation] as unknown as (input: never) => Effect.Effect<unknown, unknown>)(input),
-        ),
-      ).pipe(Effect.mapError(toChatWire(operation)));
-      return isCancellableChatRead(operation) ? run : Rpc.uninterruptible(run);
-    };
-  }
-  return handlers as never;
-}
+        ).pipe(Stream.mapError(toWire(ChatRpcs, 'watchChatList'))),
+    } satisfies RpcGroup.HandlersFrom<ChatRpc>;
+  });
 
 /**
- * Daemon handlers for folder approvals, control and provider setup. Each checks the request's
- * host and that health advertises the operation's capability. A mutation's request ID binds its
- * whole input: `replay` runs it once per ID and answers a repeat with its outcome.
+ * Serves one daemon operation: it checks the request's host and that health advertises the
+ * operation's capability. A mutation's request ID binds its whole input: `replay` runs it once per
+ * ID and answers a repeat with its outcome, as the operation's union declares it.
  */
-export function makeDaemonHandlers(services: RpcServices, replay: MutationReplay) {
-  const daemon = services.daemon!;
-  const serve = <A>(
-    operation: DaemonCommand,
+const makeServeDaemonCommand =
+  <Rpcs extends Procedure>(
+    group: RpcGroup.RpcGroup<Rpcs>,
+    served: ServedHost,
+    replay: MutationReplay,
+  ) =>
+  <const K extends DaemonCommand & Rpcs['_tag'], A, E>(
+    operation: K,
     host: ChatHostTarget,
-    input: { requestId?: string; ownerId?: string },
-    service: () => Effect.Effect<A, unknown>,
+    input: MutationInput,
+    service: () => Effect.Effect<A, E>,
   ) => {
+    const wire = toWire(group, operation);
     const checked = Effect.andThen(
-      forHost(services, host, operation),
-      services.health.capabilities.includes(daemonCommandCapabilities[operation])
+      forHost(served, host, operation),
+      served.health.capabilities.includes(daemonCommandCapabilities[operation])
         ? Effect.void
         : Effect.fail(notServed()),
     );
-    const run = () =>
-      Effect.suspend(service).pipe(Effect.mapError(toWire(daemonErrorSchemas[operation])));
-    if (!isDaemonMutation(operation)) return Effect.andThen(checked, run());
-    return Rpc.uninterruptible(Effect.andThen(checked, replay(operation, input, run())));
+    const run = Effect.suspend(service).pipe(Effect.mapError(wire));
+    if (!isDaemonMutation(operation)) return Effect.andThen(checked, run);
+    return Rpc.uninterruptible(
+      Effect.andThen(checked, replay(operation, input, run)).pipe(Effect.mapError(wire)),
+    );
   };
-  const local: Record<string, unknown> = {};
-  for (const operation of Object.keys(localHostInputSchemas) as (keyof LocalHostHandlers)[])
-    local[operation] = ({ host, input }: { host: ChatHostTarget; input: never }) =>
-      serve(operation, host, input, () =>
-        (daemon.localHost[operation] as (input: never) => Effect.Effect<unknown, unknown>)(input),
-      );
-  const owner = (ownerId: string) => daemon.providers.forOwner(ownerId);
-  type Owned = { host: ChatHostTarget; input: { ownerId: string; requestId: string } };
-  const providers = {
-    getProviders: ({ host, input }: Owned) =>
-      serve('getProviders', host, input, () =>
-        Effect.map(owner(input.ownerId).getProviders({}), (state) => ({ state })),
-      ),
-    startProviderLogin: ({ host, input }: Owned & { input: { providerId: string } }) =>
-      serve('startProviderLogin', host, input, () =>
-        Effect.map(
-          owner(input.ownerId).startProviderLogin({ providerId: input.providerId }),
-          (state) => ({ requestId: input.requestId, state }),
+
+type LocalHostRpc = RpcGroup.Rpcs<typeof LocalHostRpcs>;
+/** Folder approval and control handlers, over the local host service. */
+export const makeLocalHostHandlers = (served: ServedHost, replay: MutationReplay) =>
+  Effect.gen(function* () {
+    const localHost: LocalHostHandlers = yield* LocalHostService;
+    const serve = makeServeDaemonCommand(LocalHostRpcs, served, replay);
+    const command =
+      <K extends LocalHostCommand>(operation: K) =>
+      ({ host, input }: { host: ChatHostTarget; input: LocalHostInput<K> }) =>
+        serve(operation, host, input, () => localHost[operation](input));
+    return {
+      approveFolder: command('approveFolder'),
+      listRecentFolders: command('listRecentFolders'),
+      checkChatFolder: command('checkChatFolder'),
+      checkApprovedFolder: command('checkApprovedFolder'),
+      getActiveWork: command('getActiveWork'),
+      markFolderAsProject: command('markFolderAsProject'),
+      listHostFolders: command('listHostFolders'),
+    } satisfies RpcGroup.HandlersFrom<LocalHostRpc>;
+  });
+
+type ProviderSetupRpc = RpcGroup.Rpcs<typeof ProviderSetupRpcs>;
+/** Provider setup handlers, each for the owner its request names. */
+export const makeProviderSetupHandlers = (served: ServedHost, replay: MutationReplay) =>
+  Effect.gen(function* () {
+    const providers = yield* ProviderSetupService;
+    const serve = makeServeDaemonCommand(ProviderSetupRpcs, served, replay);
+    const owner = (ownerId: string) => providers.forOwner(ownerId);
+    return {
+      getProviders: ({ host, input }) =>
+        serve('getProviders', host, input, () =>
+          Effect.map(owner(input.ownerId).getProviders({}), (state) => ({ state })),
         ),
-      ),
-    answerProviderPrompt: ({
-      host,
-      input,
-    }: Owned & { input: { flowId: string; promptId: string; answer: string } }) =>
-      serve('answerProviderPrompt', host, input, () =>
-        Effect.map(
-          owner(input.ownerId).answerProviderPrompt({
-            flowId: input.flowId,
-            promptId: input.promptId,
-            answer: input.answer,
-          }),
-          (state) => ({ requestId: input.requestId, state }),
-        ),
-      ),
-    cancelProviderLogin: ({ host, input }: Owned & { input: { flowId: string } }) =>
-      serve('cancelProviderLogin', host, input, () =>
-        Effect.map(owner(input.ownerId).cancelProviderLogin({ flowId: input.flowId }), (state) => ({
-          requestId: input.requestId,
-          state,
-        })),
-      ),
-    openProviderUrl: ({ host, input }: Owned & { input: { flowId: string } }) =>
-      serve('openProviderUrl', host, input, () =>
-        Effect.flatMap(daemon.providers.getProviderUrl(input.ownerId, input.flowId), (url) =>
-          Effect.map(owner(input.ownerId).getProviders({}), (state) => ({ state, url })),
-        ),
-      ),
-    logoutProvider: ({ host, input }: Owned & { input: { providerId: string } }) =>
-      serve('logoutProvider', host, input, () =>
-        Effect.map(
-          owner(input.ownerId).logoutProvider({ providerId: input.providerId }),
-          (state) => ({
-            requestId: input.requestId,
-            state,
-          }),
-        ),
-      ),
-    releaseProviderOwner: ({ host, input }: Owned) =>
-      serve('releaseProviderOwner', host, input, () =>
-        daemon.providers.releaseOwner(input.ownerId),
-      ),
-    watchProviderSetup: ({ host, ownerId }: { host: ChatHostTarget; ownerId: string }) =>
-      Stream.unwrap(
-        Effect.as(
-          Effect.andThen(
-            forHost(services, host, 'watchProviderSetup'),
-            services.health.capabilities.includes(daemonCommandCapabilities.getProviders)
-              ? Effect.void
-              : Effect.fail(notServed()),
+      startProviderLogin: ({ host, input }) =>
+        serve('startProviderLogin', host, input, () =>
+          Effect.map(
+            owner(input.ownerId).startProviderLogin({ providerId: input.providerId }),
+            (state) => ({ requestId: input.requestId, state }),
           ),
-          toUpdates('providerSetup', daemon.providers.watch(ownerId)),
         ),
-      ).pipe(Stream.mapError(toWire(daemonErrorSchemas.watchProviderSetup))),
-  };
-  return { local: local as never, providers: providers as never };
-}
+      answerProviderPrompt: ({ host, input }) =>
+        serve('answerProviderPrompt', host, input, () =>
+          Effect.map(
+            owner(input.ownerId).answerProviderPrompt({
+              flowId: input.flowId,
+              promptId: input.promptId,
+              answer: input.answer,
+            }),
+            (state) => ({ requestId: input.requestId, state }),
+          ),
+        ),
+      cancelProviderLogin: ({ host, input }) =>
+        serve('cancelProviderLogin', host, input, () =>
+          Effect.map(
+            owner(input.ownerId).cancelProviderLogin({ flowId: input.flowId }),
+            (state) => ({ requestId: input.requestId, state }),
+          ),
+        ),
+      openProviderUrl: ({ host, input }) =>
+        serve('openProviderUrl', host, input, () =>
+          Effect.flatMap(providers.getProviderUrl(input.ownerId, input.flowId), (url) =>
+            Effect.map(owner(input.ownerId).getProviders({}), (state) => ({ state, url })),
+          ),
+        ),
+      logoutProvider: ({ host, input }) =>
+        serve('logoutProvider', host, input, () =>
+          Effect.map(
+            owner(input.ownerId).logoutProvider({ providerId: input.providerId }),
+            (state) => ({ requestId: input.requestId, state }),
+          ),
+        ),
+      releaseProviderOwner: ({ host, input }) =>
+        serve('releaseProviderOwner', host, input, () => providers.releaseOwner(input.ownerId)),
+      watchProviderSetup: ({ host, ownerId }) =>
+        Stream.unwrap(
+          Effect.as(
+            Effect.andThen(
+              forHost(served, host, 'watchProviderSetup'),
+              served.health.capabilities.includes(daemonCommandCapabilities.getProviders)
+                ? Effect.void
+                : Effect.fail(notServed()),
+            ),
+            toUpdates('providerSetup', providers.watch(ownerId)),
+          ),
+        ).pipe(Stream.mapError(toWire(ProviderSetupRpcs, 'watchProviderSetup'))),
+    } satisfies RpcGroup.HandlersFrom<ProviderSetupRpc>;
+  });

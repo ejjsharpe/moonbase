@@ -93,13 +93,15 @@ const applicationStreamFailures = <A, E, R>(
 export type Tag = keyof Client & string;
 export type Payload<T extends Tag> = Parameters<Client[T]>[0];
 export type Reply<T extends Tag> = ReturnType<Client[T]>;
-/** What procedure `T` fails with, as main declares it. */
-export type Failure<T extends Tag> =
+/** What procedure `T` fails with, as main declares it: its client's failures but the transport's. */
+export type Failure<T extends Tag> = Exclude<
   Reply<T> extends Effect.Effect<unknown, infer E, unknown>
     ? E
     : Reply<T> extends Stream.Stream<unknown, infer E, unknown>
       ? E
-      : never;
+      : never,
+  RpcClientError
+>;
 type Procedure = (payload: unknown) => never;
 const procedure = <T extends Tag>(client: Client, tag: T, payload: Payload<T>): Reply<T> =>
   (client as unknown as Record<string, Procedure>)[tag]!(payload);
