@@ -252,9 +252,13 @@ test('a dropped daemon shows reconnecting, then resets its watches; healthy traf
       (status) => status === 'connected',
     );
     await advanceUntil(() => list.values.length > lists && list.values.at(-1)!.reset, Boolean);
-    // Traffic `renewMs` after the reconnect proves the connection healthy.
+    // Traffic `renewMs` after the reconnect proves the connection healthy. The clock moves on
+    // while it is sent, in case a missed pong dropped the socket and it waits to reopen.
     await client.advance(P.streamLimits.renewMs);
-    await client.chat.command('listChats', { session });
+    let listed = false;
+    const listing = client.chat.command('listChats', { session }).finally(() => (listed = true));
+    await advanceUntil(() => listed, Boolean);
+    await listing;
   }
   assert.deepEqual([...chat.errors, ...list.errors], []);
   // Failed reconnects through the whole budget in one outage end the watch.

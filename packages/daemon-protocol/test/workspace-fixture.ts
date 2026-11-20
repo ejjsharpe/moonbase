@@ -109,13 +109,14 @@ export async function serveWorkspace(
     runtime = ManagedRuntime.make(TestClock.layer());
   let scope: Scope.Closeable | undefined,
     port = 0;
-  const start = async () => {
+  /** Starts the daemon; `closeRpcFirst` orders how it closes when next stopped. */
+  const start = async (order: Pick<ChatServerOptions, 'closeRpcFirst'> = {}) => {
     scope = Effect.runSync(Scope.make());
     const server = await runtime.runPromise(
       serveChat(
         { host, token, port },
         { chat: chat.client, daemon: refusingDaemon() },
-        { ...options, ...(workspace ? { workspace } : {}) },
+        { ...options, ...order, ...(workspace ? { workspace } : {}) },
       ).pipe(Effect.provideService(Scope.Scope, scope)),
     );
     port = Number(new URL(server.origin).port);

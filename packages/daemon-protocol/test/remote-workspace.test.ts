@@ -29,11 +29,13 @@ import { WorkspaceRpcs, workspaceErrorSchemaOf } from '@moonbase/contracts/works
 import { chatHostCapabilities } from '@moonbase/contracts/host';
 import { requestUpgradeNonce } from '../src/health.ts';
 import { DaemonRpcLinkLive, EndpointConnectionLive, RemoteChatLive } from '../src/client/remote.ts';
+import { streamLimits } from '../src/client/protocol.ts';
 import { makeRpcLink } from '../src/client/rpc-link.ts';
 import { upgradeProtocols } from '../src/upgrade-proof.ts';
-import { snapshotOf, host, target } from './controlled-chat-fixture.ts';
+import { nonce, snapshotOf, host, target } from './controlled-chat-fixture.ts';
 import { until } from './runtime-fixture.ts';
 import { encodeWebSocketFrame } from './websocket-frame-fixture.ts';
+import { recordSockets } from './recorded-sockets-fixture.ts';
 import {
   checkout,
   controlledWorkspace,
@@ -251,6 +253,46 @@ test('a call or watch for another host is refused before it is sent and by the d
   assert.deepEqual(files.calls, ['openCheckout', 'createWorktree']);
 });
 
+test('an upgrade the daemon refuses, or a key it does not prove, fails calls and watches and is not retried unasked; the next call proves a fresh socket', async (t) => {
+  const files = controlledWorkspace();
+  files.handlers.readFile = async () => ({ text: 'ok', version: 'v1' });
+  const daemon = await serveWorkspace(t, files.service);
+  const sockets = recordSockets(t);
+  sockets.refuse = true;
+  const client = await remoteWorkspace(t, daemon, true);
+  const { workspace, run } = client;
+  const watched = () => failure(run, Stream.runDrain(workspace.watch({ checkout, paths: [''] })));
+  assertError(await failure(run, workspace.readFile(fileTarget)), {
+    _tag: 'HostUnavailableError',
+    reason: 'refused',
+  });
+  assertError(await watched(), { _tag: 'HostUnavailableError', reason: 'refused' });
+  // Each tried one socket; long past every reconnect delay, none was tried again.
+  await client.advance(60_000);
+  assert.equal(sockets.opened.length, 2);
+  sockets.refuse = false;
+  assert.equal((await run(workspace.readFile(fileTarget))).text, 'ok');
+  assert.equal(sockets.opened.length, 3);
+  assert.equal(new Set(sockets.opened.map(({ protocols }) => protocols[1])).size, 3);
+  // A host that doesn't prove the key fails its health: no socket opens, and none is retried.
+  const impostor = await remoteWorkspace(
+    t,
+    { endpoint: { ...daemon.endpoint, token: nonce() } },
+    true,
+  );
+  for (const error of [
+    await failure(impostor.run, impostor.workspace.readFile(fileTarget)),
+    await failure(
+      impostor.run,
+      Stream.runDrain(impostor.workspace.watch({ checkout, paths: [''] })),
+    ),
+  ])
+    assert.equal(getErrorGroup(error), 'access');
+  await impostor.advance(60_000);
+  assert.equal(sockets.opened.length, 3);
+  assert.deepEqual(files.calls, ['readFile']);
+});
+
 test('a host’s errors reach the client with their codes and the client’s own text, never the host’s', async (t) => {
   const secret = '/private/host-secret';
   const raised = [
@@ -349,13 +391,29 @@ test('a mutation whose connection drops or whose reply is late is Uncertain, is 
     closeMs: 5_000,
     onCloseTimeout: Effect.sync(() => void (closeTimedOut = true)),
   });
+  const sockets = recordSockets(t);
   const client = await remoteWorkspace(t, daemon, true);
   const { workspace, run } = client;
+  // The socket drops while the daemon applies it, and runs a read. The client opens another, with
+  // a proof of its own, which carries later requests; neither is sent on it again.
+  files.handlers.readFile = () => new Promise(() => {});
+  const lost = run(Effect.flip(workspace.mutate({ ...operation, id: 'op-0' })));
+  const lostRead = run(Effect.flip(workspace.readFile(fileTarget)));
+  await until(
+    async () => gates.length + files.calls.filter((call) => call === 'readFile').length,
+    (count) => count === 2,
+  );
+  sockets.opened[0]!.socket.close();
+  assert.equal(((await lost) as { _tag: string })._tag, 'UncertainError');
+  assertError(await lostRead, { _tag: 'HostUnavailableError', reason: 'reply-lost' });
+  await client.advance(streamLimits.reconnectMs[0]);
+  assert.equal(await run(workspace.operationStatus({ ...identity, id: 'none' })), null);
+  assert.equal(sockets.opened.length, 2);
   // The connection drops while the daemon applies it.
   const dropped = run(Effect.flip(workspace.mutate(operation)));
   await until(
     async () => gates.length,
-    (count) => count === 1,
+    (count) => count === 2,
   );
   // A new generation's first request closes the old connection.
   client.replace();
@@ -365,22 +423,27 @@ test('a mutation whose connection drops or whose reply is late is Uncertain, is 
   const late = run(Effect.flip(workspace.mutate({ ...operation, id: 'op-2' })));
   await until(
     async () => gates.length,
-    (count) => count === 2,
+    (count) => count === 3,
   );
   assert.equal(((await advanceUntil(client, late)) as { _tag: string })._tag, 'UncertainError');
-  // Neither was cancelled on the daemon, nor sent again; each runs to completion there.
+  // No mutation was cancelled on the daemon (the read ended with its connection), nor was any
+  // request sent again; each mutation runs to completion there.
   for (const gate of gates) gate.resolve();
-  for (const id of ['op-1', 'op-2']) {
+  for (const id of ['op-0', 'op-1', 'op-2']) {
     const status = await until(() => run(workspace.operationStatus({ ...identity, id })), Boolean);
     assert.equal(status!.outcome, 'completed');
   }
-  assert.deepEqual(files.interrupted, []);
-  assert.equal(files.calls.filter((call) => call === 'mutate').length, 2);
+  assert.deepEqual(files.interrupted, ['readFile']);
+  assert.equal(files.calls.filter((call) => call === 'mutate').length, 3);
+  assert.equal(files.calls.filter((call) => call === 'readFile').length, 1);
+  // Each socket proved itself with a proof of its own.
+  assert.equal(sockets.opened.length, 3);
+  assert.equal(new Set(sockets.opened.map(({ protocols }) => protocols[1])).size, 3);
   // Stopping waits for a mutation still running only up to its close deadline, then goes on.
   void run(Effect.flip(workspace.mutate({ ...operation, id: 'op-3' })));
   await until(
     async () => gates.length,
-    (count) => count === 3,
+    (count) => count === 4,
   );
   await advanceUntil(daemon, daemon.stop());
   assert(closeTimedOut);
@@ -576,13 +639,22 @@ test('a watch follows changes, is bounded per connection, ends retryably when th
   await until(async () => ended.length, Boolean);
   assert.deepEqual(ended, ['unavailable']);
   // After the daemon restarts, a watch starts again from a fresh value: an event to read again from.
+  // So it does when the daemon's RPC server closes before its sockets, ending each watch with an
+  // interrupted exit (#404).
   await daemon.stop();
-  await daemon.start();
+  await daemon.start({ closeRpcFirst: true });
   await until(
     async () => events.length,
     (count) => count === 3,
   );
   assert.deepEqual(events[2], { checkout, paths: [''] });
+  await daemon.stop();
+  await daemon.start();
+  await until(
+    async () => events.length,
+    (count) => count === 4,
+  );
+  assert.deepEqual(events[3], { checkout, paths: [''] });
   // A host watch that finishes ends its watches as Unavailable, which a client retries.
   await until(async () => files.watchers.size, Boolean);
   ended.length = 0;

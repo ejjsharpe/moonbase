@@ -65,6 +65,11 @@ export type ChatServerOptions = {
   closeMs?: number;
   /** Runs once a close goes on without the work it waited for. */
   onCloseTimeout?: Effect.Effect<void>;
+  /**
+   * Stops Bun only once the RPC servers have closed, so they send each running watch and request
+   * an interrupted exit. Tests use it to prove a client takes those as a lost connection (#404).
+   */
+  closeRpcFirst?: boolean;
 };
 /** A local-mode daemon's features beyond chat: local-mode chat and control, providers, folders. */
 export const localDaemonCapabilities: readonly ChatHostCapability[] = [
@@ -344,9 +349,8 @@ export const serveChat = (
       }),
       // Releasing the listener starts three closes at once, none waiting on another to begin:
       // Bun's stop, first, so it cuts the connections before the RPC servers close them (otherwise
-      // they send each running watch an interrupt exit, which the client reads as its own and
-      // stops following, #404; this relies on `stop(true)` closing sockets synchronously and on
-      // `startImmediately`);
+      // they send each running watch and request an interrupted exit, which the client takes as a
+      // lost connection, #404; `closeRpcFirst` makes them, for tests);
       // `listening`, which refuses later requests and interrupts the answers still running; and
       // the RPC servers', which waits for the mutations they run. The release then waits
       // for the answers' cleanup (each probe's admission) and the mutations, so neither outlives
@@ -355,13 +359,25 @@ export const serveChat = (
       // journalled where it runs) and runs `onCloseTimeout`.
       (server) =>
         Effect.gen(function* () {
-          const stopping = yield* Effect.forkDetach(
-            Effect.promise(() => server.stop(true)),
-            { startImmediately: true },
-          );
-          const closing = yield* Effect.forEach([listening, serving], (scope) =>
+          const stop = Effect.promise(() => server.stop(true));
+          const close = Effect.forEach([listening, serving], (scope) =>
             Effect.forkDetach(Scope.close(scope, Exit.void), { startImmediately: true }),
           );
+          const stopFirst = Effect.gen(function* () {
+            const stopping = yield* Effect.forkDetach(stop, { startImmediately: true });
+            return [stopping, yield* close] as const;
+          });
+          const closeFirst = Effect.gen(function* () {
+            const closing = yield* close;
+            const stopping = yield* Effect.forkDetach(
+              Effect.andThen(Fiber.awaitAll(closing), stop),
+              {
+                startImmediately: true,
+              },
+            );
+            return [stopping, closing] as const;
+          });
+          const [stopping, closing] = yield* options.closeRpcFirst ? closeFirst : stopFirst;
           yield* Effect.all(
             [
               Fiber.await(stopping),
