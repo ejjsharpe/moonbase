@@ -24,8 +24,11 @@ import {
 const check = <K extends ChatCommand>(operation: K, output: unknown) =>
   checkChatOutput(operation, output as ChatOutput<K>, inputs[operation] as ChatInput<K>);
 /** How a schema-valid reply is refused: decoded first, as one arriving from the wire is. */
-const refusalOf = <K extends ChatCommand>(operation: K, output: unknown) => {
-  const error = Effect.runSync(Effect.flip(check(operation, decodeChatOutput(operation, output))));
+const refusalOf = <K extends ChatCommand>(operation: K, output: unknown, input?: ChatInput<K>) => {
+  const reply = decodeChatOutput(operation, output);
+  const error = Effect.runSync(
+    Effect.flip(checkChatOutput(operation, reply, input ?? (inputs[operation] as ChatInput<K>))),
+  );
   return { tag: error._tag, reason: 'reason' in error ? error.reason : error.problem };
 };
 const invalidReply = { tag: 'IncompatibleHostError', reason: 'invalid-reply' };
@@ -42,6 +45,7 @@ const part = {
   text: '',
   truncated: false,
 };
+const selection = { partId: 'm0.b0', bytes: 1, revision: 'a'.repeat(64) };
 const historyOf = (transcript: unknown) => ({
   entries: [{ ...snapshot.entries[0], transcript }],
   olderCursor: null,
@@ -58,6 +62,30 @@ test('a reply naming another host, actor, chat or request is refused', () => {
       ...outputs.listChats,
       conversations: [{ ...conversation, target: { ...target, actorId: other } }],
     }),
+    'row from another store': refusalOf('listChats', {
+      ...outputs.listChats,
+      conversations: [
+        { ...conversation, target: { ...target, host: { ...host, storeId: other } } },
+      ],
+    }),
+    'chunk from another store': refusalOf(
+      'getChatTranscriptContent',
+      {
+        kind: 'content',
+        cursor: null,
+        source: {
+          kind: 'entry',
+          target: { ...target, host: { ...host, storeId: other } },
+          entryId: 'entry',
+        },
+        selection,
+        offset: 0,
+        nextCursor: null,
+        encoding: 'utf8',
+        data: 'x',
+      },
+      { ...inputs.getChatTranscriptContent, selection },
+    ),
     'run for another chat': refusalOf('getChat', {
       ...snapshot,
       run: {
