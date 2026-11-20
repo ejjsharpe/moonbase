@@ -50,8 +50,9 @@ test('project rules reject violations and preserve documented exceptions', () =>
       // An edge lifts only what it names: Electron main's root may make its runner, nothing else.
       'apps/desktop/src/main/main.ts':
         'import { Runtime } from "effect";\nexport const run = Runtime.makeRunMain(() => {}); setTimeout(() => {}, 1);',
-      'apps/desktop/src/renderer/chat/chat-header.tsx':
-        'export const close = (runner, runtime, effect) => [runner.runSync(effect), runtime.runSync(effect)];',
+      // The renderer's root may fork and run, but not run for an Exit.
+      'apps/desktop/src/renderer/main.tsx':
+        'export const run = (runtime, effect) => [runtime.runFork(effect), runtime.runPromiseExit(effect)];',
     };
     for (const [name, source] of Object.entries(fixtures)) {
       const file = path.join(directory, name);
@@ -102,7 +103,7 @@ test('project rules reject violations and preserve documented exceptions', () =>
     ]);
     assert.deepEqual(restricted('time.test.ts'), []);
     assert.deepEqual(restricted('main/main.ts'), ['eslint(no-restricted-globals)']);
-    assert.deepEqual(restricted('chat/chat-header.tsx'), ['eslint(no-restricted-properties)']);
+    assert.deepEqual(restricted('renderer/main.tsx'), ['eslint(no-restricted-properties)']);
 
     const format = spawnSync(process.execPath, [tools('oxfmt'), '--stdin-filepath=example.tsx'], {
       cwd: directory,

@@ -1,9 +1,7 @@
-/** How `reveal` treats an ignored file while Hide Ignored Files is on, and when it gives up. */
+/** How `reveal` treats an ignored file while Hide Ignored Files is on, and whether it reports. */
 export type RevealOptions = {
   /** 'show' (the default) turns Hide Ignored Files off; 'skip' leaves the file unrevealed. */
   ignored?: 'show' | 'skip';
-  /** Checked after each listing and before the tree changes; once false, the reveal stops. */
-  current?: () => boolean;
   /** Fails without reporting, for a reveal the user didn't ask for. */
   quiet?: boolean;
 };

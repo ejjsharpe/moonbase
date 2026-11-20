@@ -306,10 +306,31 @@ test('the menu cuts, copies and pastes, enabling Paste only with something to pa
   await expect(item(page, 'Paste')).toHaveAttribute('aria-disabled', 'true');
   // Escape goes to the menu, which closes; Escape in the tree would cancel the cut.
   await page.getByRole('menu', { name: 'File actions', exact: true }).press('Escape');
+  // A paste that lands once another menu has opened leaves focus in that menu.
+  await page.evaluate(() => {
+    const { client } = window.demo;
+    const command = client.command;
+    const held = Promise.withResolvers<void>();
+    client.command = (async (...args: Parameters<typeof command>) => {
+      if (args[0] !== 'mutate') return command.apply(client, args);
+      client.command = command;
+      await held.promise;
+      return command.apply(client, args);
+    }) as typeof command;
+    Object.assign(window, { releasePaste: held.resolve });
+  });
   await row(page, 'src').click({ button: 'right' });
   await item(page, 'Paste').click();
+  await expect(menu(page)).toHaveCount(0);
+  await region(page).getByRole('button', { name: 'Explorer actions', exact: true }).click();
+  const explorerMenu = page.getByRole('menu', { name: 'Explorer actions', exact: true });
+  const inExplorerMenu = () =>
+    explorerMenu.evaluate((menu) => menu.contains(document.activeElement));
+  await expect.poll(inExplorerMenu).toBe(true);
+  await page.evaluate(() => (window as unknown as { releasePaste(): void }).releasePaste());
   await expect(row(page, 'src/welcome.ts')).toBeVisible();
   await expect(row(page, 'welcome.ts')).toHaveCount(0);
+  expect(await inExplorerMenu()).toBe(true);
 });
 
 test('a cut entry that has gone reports it and clears the clipboard', async ({ page }) => {

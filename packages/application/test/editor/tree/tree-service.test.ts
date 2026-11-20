@@ -79,7 +79,7 @@ test('reveal shows an ignored file by turning Hide Ignored Files off, unless tol
   }
 });
 
-test('a newer reveal, or one no longer current, abandons a reveal still listing', async () => {
+test('a newer reveal abandons a reveal still listing', async () => {
   const f = await fixture('reveal-source', false);
   const entered = held(),
     release = held();
@@ -109,11 +109,29 @@ test('a newer reveal, or one no longer current, abandons a reveal still listing'
     assert.equal(await stale, false);
     assert.deepEqual(treeOf(editor).selected, ['b.ts']);
     assert.deepEqual(treeOf(editor).expanded, []);
-
-    assert.equal(await editor.reveal(target('folder/nested.ts'), { current: () => false }), false);
-    assert.deepEqual(treeOf(editor).selected, ['b.ts']);
   } finally {
     release.release();
+    await editor.dispose();
+    await f.dispose();
+  }
+});
+
+test('interrupting a reveal still listing abandons it before it changes the tree', async () => {
+  const f = await fixture('reveal-interrupted-source', false);
+  const { editor, hold } = await countedEditor(f, 'reveal-interrupted');
+  try {
+    hold.path = 'folder';
+    const abort = new AbortController();
+    const revealing = editor.reveal(target('folder/nested.ts'), {}, abort.signal);
+    await hold.entered.promise;
+    abort.abort();
+    await assert.rejects(revealing, { _tag: 'CancelledError' });
+    hold.release.release();
+    await editor.list(checkout, 'folder');
+    assert.deepEqual(treeOf(editor).selected, []);
+    assert.deepEqual(treeOf(editor).expanded, []);
+  } finally {
+    hold.release.release();
     await editor.dispose();
     await f.dispose();
   }

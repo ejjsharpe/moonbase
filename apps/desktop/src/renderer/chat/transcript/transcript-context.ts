@@ -13,8 +13,8 @@ import type { TranscriptView } from './transcript-view.ts';
  */
 export type TranscriptShared = {
   selection: ChatSelectionShape;
-  /** Runs a chat action on the renderer's root runtime; the chat shows its own failure. */
-  act(action: Effect.Effect<void>): Promise<void>;
+  /** Runs a chat action while the transcript shows; the chat shows its own failure. */
+  act(action: Effect.Effect<void>): void;
   /** The view's atoms: what it presents, its list items, and each row's state. */
   view: TranscriptView;
   /** The chat this transcript shows, and the backend serving it. */

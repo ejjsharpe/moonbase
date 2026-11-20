@@ -2,7 +2,7 @@ import * as stylex from '@stylexjs/stylex';
 import { colors, space, syntax, type } from '@moonbase/ui/tokens.stylex';
 import { useAtomValue } from '@effect/atom-react';
 import { Choice } from '../choice.tsx';
-import { FolderPicker, type ChatFolderProject } from '../folder-picker.tsx';
+import { FolderPicker, type ChatFolderProject, type RecentFolders } from '../folder-picker.tsx';
 import type { ChatHosts } from '../chat-view.tsx';
 import { useChat } from '../chat-context.ts';
 
@@ -30,7 +30,7 @@ export function NewChatPlace({
   worktreeChoice: boolean;
   disabled: boolean;
   folderProjects: readonly ChatFolderProject[];
-  recentFolders?: () => Promise<readonly string[]>;
+  recentFolders?: RecentFolders;
   hosts?: ChatHosts;
   inDock: boolean;
   chooseFolder(folder: string): void;

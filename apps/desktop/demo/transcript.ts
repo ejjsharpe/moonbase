@@ -9,6 +9,25 @@ import type {
 } from '@moonbase/contracts/chat';
 import { chatLiveTextBytes } from '@moonbase/contracts/chat';
 import type { TranscriptNative } from '../src/renderer/chat/transcript/transcript-actions.ts';
+import type { TranscriptCopy, TranscriptImage } from '../src/ipc/chat-rpcs.ts';
+
+/** The demo's transcript native actions as Promises, which specs replace to observe or hold. */
+export type DemoTranscriptNative = {
+  copy(input: TranscriptCopy, signal?: AbortSignal): Promise<void>;
+  openLink(url: string, signal?: AbortSignal): Promise<void>;
+  imageUrl(input: TranscriptImage, signal?: AbortSignal): Promise<string>;
+};
+/** The views' Effects over `native`, each calling what it holds when it runs. */
+export const toTranscriptNative = (native: DemoTranscriptNative): TranscriptNative => {
+  // A spec's Promise rejects with what main would fail with.
+  const promised = <A, E>(call: (signal: AbortSignal) => Promise<A>) =>
+    Effect.tryPromise({ try: call, catch: (error) => error as E });
+  return {
+    copy: (input) => promised((signal) => native.copy(input, signal)),
+    openLink: (url) => promised((signal) => native.openLink(url, signal)),
+    imageUrl: (input) => promised((signal) => native.imageUrl(input, signal)),
+  };
+};
 import type { chatCapabilities } from './chat.ts';
 import { parseTranscriptMarkdown } from '../src/ipc/transcript-markdown.ts';
 import { markdownWork } from '../src/renderer/chat/transcript/markdown/markdown-model.ts';
@@ -234,7 +253,7 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
     links: string[] = [];
   /** A source's chunks, read as main reads them; the demo has no main process. */
   const readSource = (
-    input: Pick<Parameters<TranscriptNative['copy']>[0], 'source' | 'selection'>,
+    input: Pick<TranscriptCopy, 'source' | 'selection'>,
     signal?: AbortSignal,
   ): Promise<TranscriptChunk[]> =>
     Effect.runPromise(
@@ -251,7 +270,7 @@ export async function installTranscriptDemo(chat: ReturnType<typeof chatCapabili
       ),
       signal ? { signal } : undefined,
     );
-  const native: TranscriptNative = {
+  const native: DemoTranscriptNative = {
     async copy(input, signal) {
       let text = '';
       for (const chunk of await readSource(input, signal)) text += chunk.data;

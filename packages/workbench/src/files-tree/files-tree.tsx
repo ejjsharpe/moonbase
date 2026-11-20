@@ -1,4 +1,5 @@
 import * as stylex from '@stylexjs/stylex';
+import { Effect } from 'effect';
 import {
   useEffect,
   useId,
@@ -36,6 +37,7 @@ import { useTreeMenu } from './use-tree-menu.ts';
 import { useTreeVirtualizer } from './use-tree-virtualizer.ts';
 import type { RunMutation } from '../mutation-runner.tsx';
 import type { EditorActions } from '../editor-actions.ts';
+import { useEditorTask } from '../use-editor-task.ts';
 
 /** A checkout's files as a tree of `treeitem` rows, with its menu, name editing and drops. */
 export function FilesTree({
@@ -57,10 +59,7 @@ export function FilesTree({
   onUndo,
   createRequest,
   onCreateRequestTaken,
-  copyPaths,
-  revealPath,
   mentionInChat,
-  selectDroppedImports,
   clipboard,
   onClipboard,
   onCancelCut,
@@ -96,23 +95,14 @@ export function FilesTree({
   onMoved: (record: MoveRecord) => void;
   /**
    * Undoes the last move or rename; a replace prompt it raises returns focus to `finalFocus`.
-   * Resolves true once undone.
+   * Succeeds true once undone.
    */
-  onUndo: (finalFocus: () => HTMLElement | false) => Promise<boolean>;
+  onUndo: (finalFocus: () => HTMLElement | false) => Effect.Effect<boolean>;
   createRequest: TreeCreateRequest | null;
   /** Called once the tree has started `createRequest`'s edit. */
   onCreateRequestTaken: () => void;
-  /** Copies a checkout's paths to the clipboard, joined by newlines: absolute, or as `relative`. */
-  copyPaths?: (checkout: CheckoutTarget, paths: string[], relative: boolean) => Promise<void>;
-  /** Shows a checkout's file or folder in the OS file manager. */
-  revealPath?: (checkout: CheckoutTarget, path: string) => Promise<void>;
   /** Mentions files in the chat beside this checkout. */
   mentionInChat?: (checkout: CheckoutTarget, paths: string[]) => void;
-  /**
-   * Approves files dropped from the OS for import into a checkout, one opaque reference per file
-   * in order. Without it, such drops pass through to the app.
-   */
-  selectDroppedImports?: (checkout: CheckoutTarget, files: File[]) => Promise<string[]>;
   /** The workbench's file clipboard, whose cut entries in this checkout are dimmed. */
   clipboard: FileClipboard | null;
   /** Puts entries on the file clipboard to copy or move (⌘C, ⌘X). */
@@ -127,15 +117,10 @@ export function FilesTree({
   const tree = state.recovery.views.get(checkout.checkoutId)!.tree,
     treeElement = useRef<HTMLDivElement>(null),
     anchor = useRef<string | null>(null),
-    mounted = useRef(true),
     id = useId();
+  // The tree's own work, such as an undo or a drop, ends with it: its checkout's tree is gone.
+  const run = useEditorTask(actions);
   useImperativeHandle(ref, () => treeElement.current!, []);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
   useLayoutEffect(() => {
     anchor.current = null;
   }, [anchorReset]);
@@ -162,7 +147,6 @@ export function FilesTree({
     expanded,
     hideIgnored: !!tree.hideIgnoredFiles,
     setAnchor,
-    mounted,
     focus,
     runMutation,
     onMoved,
@@ -201,7 +185,6 @@ export function FilesTree({
     canRequestMutation,
     runMutation,
     setAnchor,
-    mounted,
     focus,
     target,
     findRowAt,
@@ -213,7 +196,7 @@ export function FilesTree({
     onMoved,
     closeMenu: menu.closeMenu,
   });
-  const fileDrop = useFileDrop({ ...dropInputs, treeElement, selectDroppedImports });
+  const fileDrop = useFileDrop({ ...dropInputs, treeElement });
   const dropFolder = target.dropFolder;
   // Hiding ignored entries moves focus to the folder that still shows and drops hidden selections.
   const shownFocus = tree.hideIgnoredFiles
@@ -232,11 +215,7 @@ export function FilesTree({
     if (hiddenSelection === null) return;
     const [focus, selected] = JSON.parse(hiddenSelection) as [string, string[]];
     anchor.current = null;
-    try {
-      actions.tree(checkout, { focus, selected });
-    } catch (error) {
-      actions.report(error);
-    }
+    actions.tree(checkout, { focus, selected });
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- Move each hidden selection once.
   }, [hiddenSelection]);
   useFollowActiveFile({
@@ -244,7 +223,6 @@ export function FilesTree({
     checkout,
     treeElement,
     setAnchor,
-    mounted,
     follow,
     followed,
     active,
@@ -269,8 +247,7 @@ export function FilesTree({
     requestMutation,
     startEdit,
     returnTreeFocus: focus.returnTreeFocus,
-    copyPaths,
-    revealPath,
+    run,
     mentionInChat,
     putOnClipboard: onClipboard,
     canPasteInto,
@@ -288,7 +265,7 @@ export function FilesTree({
         ? tree.expanded.filter((value) => value !== path)
         : [...tree.expanded, path],
     });
-    if (!wasExpanded) void actions.list(checkout, path).catch(actions.report);
+    if (!wasExpanded) actions.start(actions.list(checkout, path));
   }
   const treeFocusIndex = Math.max(
     0,
@@ -296,6 +273,7 @@ export function FilesTree({
   );
   const navigation: TreeNavigation = {
     actions,
+    run,
     checkout,
     rows: treeRows,
     focusIndex: treeFocusIndex,
@@ -310,11 +288,15 @@ export function FilesTree({
     commandsFor: (paths) => listFileCommands(commandContext, paths),
     undo() {
       if (!undoLabel) return;
-      void onUndo(focus.returnTreeFocus).then((undone) => {
-        if (!undone || !mounted.current) return;
-        anchor.current = null;
-        if (focus.focusStayed()) focus.refocusTree();
-      });
+      run(
+        Effect.tap(onUndo(focus.returnTreeFocus), (undone) =>
+          Effect.sync(() => {
+            if (!undone) return;
+            anchor.current = null;
+            if (focus.focusStayed()) focus.refocusTree();
+          }),
+        ),
+      );
     },
     cancelCut: onCancelCut,
   };
@@ -403,6 +385,7 @@ export function FilesTree({
                   editing && (
                     <FilesTreeName
                       key={editing.id}
+                      actions={actions}
                       label={editLabels[editing.kind]}
                       initial={startingName(editing)}
                       directory={row.directory}
@@ -419,7 +402,7 @@ export function FilesTree({
                 }}
                 onOpen={(path) => {
                   if (path === editPath) return;
-                  void actions.open({ checkout, path }, { view: 'file', intent: 'keep' });
+                  run(actions.open({ checkout, path }, { view: 'file', intent: 'keep' }));
                 }}
               />
             );

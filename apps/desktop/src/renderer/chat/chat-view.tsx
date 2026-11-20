@@ -7,7 +7,7 @@ import {
   useSyncExternalStore,
   type KeyboardEvent,
 } from 'react';
-import { Context } from 'effect';
+import { Context, Effect } from 'effect';
 import { useAtomValue } from '@effect/atom-react';
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
@@ -19,11 +19,13 @@ import {
   type ChatComposer,
   type ChatServices,
 } from '@moonbase/application/chat';
-import type { DesktopRunner } from '../shell/desktop-application.ts';
 import { FindBar, handleChatFindKeyDown, type ChatFindOwner } from './find.tsx';
 import { Transcript } from './transcript/transcript.tsx';
 import type { TranscriptNative } from './transcript/transcript-actions.ts';
-import type { ChatFolderProject } from './folder-picker.tsx';
+import type { EditorFailure } from '@moonbase/application/editor';
+import type { NativeFailure } from '../ipc/desktop-native.ts';
+import type { ShellNative } from '../shell/desktop-shell.tsx';
+import type { ChatFolderProject, RecentFolders } from './folder-picker.tsx';
 import { ChatList } from './chat-list.tsx';
 import { ProjectChatList } from './project-chat-list.tsx';
 import { ChatHeader, DockChatHeader } from './chat-header.tsx';
@@ -31,6 +33,17 @@ import { PendingCommands } from './pending-commands.tsx';
 import { Composer } from './composer/composer.tsx';
 import { focusMessage } from './open-chat.ts';
 import { ChatContext, useChatShared, type ChatShared } from './chat-context.ts';
+
+/** Makes a local folder's linked worktree for a new chat, failing as main or the editor does. */
+export type ChatWorktreeCreation = (
+  root: string,
+  branch: string,
+  requestId: string,
+) => Effect.Effect<string, NativeFailure<'createChatWorktree'> | EditorFailure>;
+/** Turns a local chat's own folder into a project, failing as main or the editor does. */
+export type TurnIntoProject = (
+  conversationId: string,
+) => Effect.Effect<void, NativeFailure<'turnChatIntoProject'> | EditorFailure>;
 
 const compactLayout = window.matchMedia('(max-width: 640px)');
 const subscribeLayout = (listener: () => void) => {
@@ -94,7 +107,6 @@ function ChatNotices({ chat }: { chat: ChatShared }) {
 export function ChatView({
   services,
   composer,
-  runner,
   chooseFolder,
   recentFolders,
   folderProjects = [],
@@ -112,17 +124,16 @@ export function ChatView({
   services: Context.Context<ChatServices>;
   /** The chat's composer, made beside its services: it outlives this view. */
   composer: ChatComposer;
-  /** The renderer root's runners, which the composer's and transcript's actions run on. */
-  runner: DesktopRunner;
-  chooseFolder?: () => Promise<string | null>;
+  /** A folder chosen in the native picker; null when the user cancelled. */
+  chooseFolder?: ShellNative['chooseChatFolder'];
   /** Folders the native picker approved before, offered again without it. */
-  recentFolders?: () => Promise<readonly string[]>;
+  recentFolders?: RecentFolders;
   /** The editor's checkouts, which local chat may use without the picker. */
   folderProjects?: readonly ChatFolderProject[];
   /** Creates a linked worktree of a local folder, named for the branch, and returns its root. */
-  createWorktree?: (root: string, branch: string, requestId: string) => Promise<string>;
+  createWorktree?: ChatWorktreeCreation;
   /** Opens a local chat without a project's folder as a project where it is. */
-  turnIntoProject?: (conversationId: string) => Promise<void>;
+  turnIntoProject?: TurnIntoProject;
   transcriptNative?: TranscriptNative;
   /** Shows only one project's chats, beside its editor, with a back arrow to their list. */
   dock?: ChatDock;
@@ -145,7 +156,7 @@ export function ChatView({
     [dockList, setDockList] = useState(false);
   const titleId = useId();
   const findInput = useRef<HTMLInputElement>(null);
-  const shared = useChatShared(services, runner);
+  const shared = useChatShared(services);
   const { atoms, backendId, act } = shared;
   const connected = useAtomValue(atoms.ready);
   // A remote host's own folders never open here as a project, nor in this Mac's folder picker.
@@ -159,23 +170,22 @@ export function ChatView({
   const openSeenAt = openListing && (openListing.activity?.at ?? openListing.createdAt);
   useEffect(() => {
     if (!visible || !openListing || !openSeenAt || document.visibilityState !== 'visible') return;
-    void act(
-      Context.get(services, ChatDrafts).markSeen(openListing.target.conversationId, openSeenAt),
-    );
+    act(Context.get(services, ChatDrafts).markSeen(openListing.target.conversationId, openSeenAt));
   }, [services, act, visible, openListing, openSeenAt]);
   // The list follows the host's chat list watch. Becoming visible watches it again if that watch
   // stopped, and lists again once it delivers.
   useEffect(() => {
     if (!connected) return;
     const resume = () => {
-      if (document.visibilityState === 'visible')
-        void act(Context.get(services, ChatListService).watch);
+      if (document.visibilityState === 'visible') act(Context.get(services, ChatListService).watch);
     };
     document.addEventListener('visibilitychange', resume);
     return () => document.removeEventListener('visibilitychange', resume);
   }, [services, act, connected]);
   const startNewChat = () =>
-    void act(Context.get(services, ChatSelection).closeView).then(focusMessage);
+    act(
+      Effect.tap(Context.get(services, ChatSelection).closeView, () => Effect.sync(focusMessage)),
+    );
   const findOwner = JSON.stringify([backendId, selected]);
   const find = useMemo<ChatFindOwner>(
     () => ({ owner: findOwner, selected: !!selected, open: findOpen }),
@@ -196,7 +206,6 @@ export function ChatView({
           backendId={backendId}
           target={selected}
           native={transcriptNative}
-          runner={runner}
         />
       )}
       <Composer

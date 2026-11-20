@@ -2,7 +2,11 @@ import * as stylex from '@stylexjs/stylex';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { controls } from '@moonbase/ui/controls';
 import { filesUI } from '@moonbase/ui/files';
+import { Effect } from 'effect';
 import { measureStem } from './files-tree-rows.ts';
+import type { EditorActions } from '../editor-actions.ts';
+import { usePendingEditorTask } from '../use-editor-task.ts';
+import type { WorkbenchServices } from '../workbench-editor.ts';
 
 /** How a typed name was committed: Enter keeps the field open on an error, blur never does. */
 export type NameCommit = 'enter' | 'blur';
@@ -10,28 +14,34 @@ export type NameCommit = 'enter' | 'blur';
 /**
  * The text field a tree row shows while its name is typed. It focuses itself with the stem
  * selected; Enter or blur commits and Escape cancels. Focus leaving the window is no blur: the
- * field keeps editing and takes focus back when the window does. `onCommit` resolves to an error
+ * field keeps editing and takes focus back when the window does. `onCommit` succeeds with an error
  * to show (or '' to keep editing without one), or null once the edit has ended; a blur passes
  * where focus went.
  */
 export function FilesTreeName({
+  actions,
   label,
   initial,
   directory,
   onCommit,
   onCancel,
 }: {
+  actions: EditorActions;
   label: string;
   initial: string;
   directory: boolean;
-  onCommit: (name: string, how: NameCommit, next: Element | null) => Promise<string | null>;
+  onCommit: (
+    name: string,
+    how: NameCommit,
+    next: Element | null,
+  ) => Effect.Effect<string | null, unknown, WorkbenchServices>;
   onCancel: () => void;
 }) {
   const [value, setValue] = useState(initial),
-    [error, setError] = useState(''),
-    [busy, setBusy] = useState(false);
+    [error, setError] = useState('');
+  // One commit at a time, while the field shows.
+  const [busy, run] = usePendingEditorTask(actions);
   const input = useRef<HTMLInputElement>(null),
-    pending = useRef(false),
     ended = useRef(false),
     errorId = useId();
   useLayoutEffect(() => {
@@ -54,30 +64,32 @@ export function FilesTreeName({
     view.addEventListener('focus', regainFocus);
     return () => view.removeEventListener('focus', regainFocus);
   }, []);
-  async function commit(how: NameCommit, next: Element | null = null) {
-    if (pending.current || ended.current) return;
-    pending.current = true;
-    setBusy(true);
-    const result = await onCommit(value, how, next);
-    pending.current = false;
-    if (result === null) {
-      ended.current = true;
-      return;
-    }
+  function commit(how: NameCommit, next: Element | null = null) {
     if (ended.current) return;
-    setBusy(false);
-    setError(result);
-    // Take focus back from a closing prompt or from nowhere, but not from where the user went.
-    const element = input.current,
-      focused = element?.ownerDocument.activeElement;
-    if (
-      element &&
-      (!focused ||
-        focused === element ||
-        focused === element.ownerDocument.body ||
-        focused.closest('[role="dialog"]'))
-    )
-      element.focus();
+    run(
+      Effect.tap(onCommit(value, how, next), (result) =>
+        Effect.sync(() => {
+          if (result === null) {
+            ended.current = true;
+            return;
+          }
+          if (ended.current) return;
+          setError(result);
+          // Take focus back from a closing prompt or from nowhere, but not from where the user
+          // went.
+          const element = input.current,
+            focused = element?.ownerDocument.activeElement;
+          if (
+            element &&
+            (!focused ||
+              focused === element ||
+              focused === element.ownerDocument.body ||
+              focused.closest('[role="dialog"]'))
+          )
+            element.focus();
+        }),
+      ),
+    );
   }
   return (
     <span {...stylex.props(filesUI.edit)}>
@@ -100,11 +112,11 @@ export function FilesTreeName({
           if (event.nativeEvent.isComposing) return;
           if (event.key === 'Enter') {
             event.preventDefault();
-            void commit('enter');
+            commit('enter');
           } else if (event.key === 'Escape') {
             event.preventDefault();
             event.stopPropagation();
-            if (pending.current || ended.current) return;
+            if (busy || ended.current) return;
             ended.current = true;
             onCancel();
           }
@@ -112,7 +124,7 @@ export function FilesTreeName({
         onBlur={(event) => {
           // The window losing focus, such as on ⌘Tab, leaves the name being typed.
           if (!event.currentTarget.ownerDocument.hasFocus()) return;
-          void commit('blur', event.relatedTarget);
+          commit('blur', event.relatedTarget);
         }}
         // The row's own pointer gestures select, open and toggle; the field keeps its own.
         onClick={(event) => event.stopPropagation()}

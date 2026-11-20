@@ -1,5 +1,6 @@
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Ref, Scope, SubscriptionRef } from 'effect';
 import { EditorError } from '../editor-errors.ts';
+import { awaitForCaller } from '../await-for-caller.ts';
 
 /** The editor's modes, which gate what every concept admits. */
 export type SessionState = {
@@ -46,6 +47,11 @@ export type EditorSessionShape = {
    * running.
    */
   readonly run: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  /**
+   * `run` for work only its caller wants, such as an open or a reveal a view asked for:
+   * interrupting the caller interrupts it too.
+   */
+  readonly runWithCaller: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   /** Runs an action the editor owns once it admits it: `run` after `admit`. */
   readonly admitted: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
@@ -103,15 +109,16 @@ export class EditorSession extends Context.Service<EditorSession, EditorSessionS
         // The fence is the forked fiber's first step, and the work starts in the same synchronous
         // step: a close announced before it admits nothing, and one announced after it closes the
         // scope the work already runs in.
-        const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-          Effect.flatMap(
-            Effect.forkIn(
-              Effect.flatMap(get, (current) => (current.closing ? Effect.interrupt : effect)),
-              scope,
-              { startImmediately: true },
-            ),
-            Fiber.join,
+        const fork = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+          Effect.forkIn(
+            Effect.flatMap(get, (current) => (current.closing ? Effect.interrupt : effect)),
+            scope,
+            { startImmediately: true },
           );
+        const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+          Effect.flatMap(fork(effect), Fiber.join);
+        const runWithCaller = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+          awaitForCaller(fork(effect), Fiber.join);
         const close = Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             const first = yield* SubscriptionRef.modify(state, (s) => [
@@ -139,6 +146,7 @@ export class EditorSession extends Context.Service<EditorSession, EditorSessionS
           update,
           scope,
           run,
+          runWithCaller,
           admitted: (effect) => run(Effect.andThen(admit, effect)),
           admits,
           admit,

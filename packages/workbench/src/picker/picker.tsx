@@ -15,6 +15,7 @@ import {
   type TextSearch,
   type TextSearchOptions,
   type TextSearchSnapshot,
+  type EditorFailure,
 } from '@moonbase/application/editor';
 import { controls } from '@moonbase/ui/controls';
 import { checkoutName } from '@moonbase/ui/projects';
@@ -35,13 +36,16 @@ import {
 } from './picker-shortcuts.ts';
 import { styles } from './picker-styles.ts';
 import type { EditorActions } from '../editor-actions.ts';
+import { useEditorTask } from '../use-editor-task.ts';
 
-/** Opens a file, at a line when Find picked a match; resolves false when it was not opened. */
+/**
+ * Opens a file, at a line when Find picked a match; succeeds false when it was not opened. A newer
+ * query or closing the picker interrupts it.
+ */
 export type PickerOpenFile = (
   target: FileTarget,
   at: { line: number; column: number; length: number } | undefined,
-  current: () => boolean,
-) => Promise<boolean>;
+) => Effect.Effect<boolean, EditorFailure>;
 
 const emptyLookup = Atom.make<LookupSnapshot>({ rows: [], message: '', busy: false });
 const emptySearch = Atom.make<TextSearchSnapshot>({ files: [], message: '', busy: false });
@@ -73,8 +77,13 @@ export function Picker({
   editorFocus: () => HTMLElement | null;
 }) {
   // An opened file takes focus; otherwise focus returns where it was, and an entry that changes
-  // view moves it from there.
-  const openedFile = useRef(false);
+  // view moves it from there. The picker closes once the opened file has rendered, so its editor
+  // is there to take focus.
+  const [openedFile, setOpenedFile] = useState(false);
+  useEffect(() => {
+    if (openedFile) close();
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- Closes once, when a file opened.
+  }, [openedFile]);
   // Where focus was before the field took it as it mounted, which the dialog would see instead.
   const [opener] = useState(() => document.activeElement);
   const input = useRef<HTMLInputElement>(null);
@@ -103,15 +112,17 @@ export function Picker({
   const files = useAtomValue(lookup ? atoms.lookup.state(lookup) : emptyLookup);
   const found = useAtomValue(search ? atoms.textSearch.state(search) : emptySearch);
   const commands = mode === 'goto' && query.startsWith('>');
+  // The picker's own work, which closing it interrupts.
+  const run = useEditorTask(actions);
   const scope = checkout ? checkoutKey(checkout) : '';
   useEffect(() => {
     if (!lookup || !checkout || mode !== 'goto' || commands) return;
-    void actions.call(lookup.query(query, [checkout]));
+    run(lookup.query(query, [checkout]));
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- the checkout is keyed by `scope`.
   }, [lookup, scope, mode, commands, query]);
   useEffect(() => {
     if (!search || !checkout || mode !== 'find') return;
-    void actions.call(search.query(query, options, checkout));
+    run(search.query(query, options, checkout));
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- the checkout is keyed by `scope`.
   }, [search, scope, mode, query, options]);
 
@@ -136,23 +147,14 @@ export function Picker({
     at?: Parameters<PickerOpenFile>[1],
   ) {
     if (!model) return;
-    // A newer query or closing the picker cancels the open: it is then no longer wanted.
-    let wanted = true;
-    const open = Effect.promise(() => openFile(target, at, () => wanted)).pipe(
-      Effect.onInterrupt(() =>
+    // A newer query or closing the picker interrupts the open: it is then no longer wanted.
+    run(
+      Effect.tap(model.open(openFile(target, at)), (opened) =>
         Effect.sync(() => {
-          wanted = false;
+          if (opened) setOpenedFile(true);
         }),
       ),
     );
-    void actions
-      .call(model.open(open))
-      .then((opened) => {
-        if (!opened) return;
-        openedFile.current = true;
-        close();
-      })
-      .catch(actions.report);
   }
   function activateGoTo(row: GoToRow) {
     if (row.file) return pickFile(lookup, row.file);
@@ -226,7 +228,7 @@ export function Picker({
         <Dialog.Popup
           initialFocus={input}
           finalFocus={() => {
-            if (openedFile.current) return editorFocus() ?? false;
+            if (openedFile) return editorFocus() ?? false;
             return opener instanceof HTMLElement && opener.isConnected ? opener : true;
           }}
           data-picker=""

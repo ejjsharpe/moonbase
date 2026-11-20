@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { Effect } from 'effect';
 import { formatChatMention } from '@moonbase/contracts/chat';
+import { ChatDrafts } from '@moonbase/application/chat';
 import {
   Storage,
   chatFixture,
@@ -29,6 +31,82 @@ test('a new chat’s draft is kept before any chat exists and reopens without re
   await f.reopen();
   assert.equal((await f.state()).draft, 'A draft before opening a project or chat');
   assert.deepEqual(f.calls, []);
+});
+
+test('/new moves the rest to the new chat’s draft in the write that leaves the chat, once', async (t) => {
+  const f = await chatFixture(t);
+  await f.setDraft('Waiting');
+  await openChat(f);
+  await f.setDraft('/new\nCarry this');
+  const written: string[] = [];
+  f.storage.onWrite = (value) => written.push(value);
+  // The same `/new` submitted twice, both typed in the open chat.
+  const newChat = () =>
+    f.runtime.runPromise(
+      f
+        .composer()
+        .startNewChat({ selected: target, text: '/new\nCarry this' }, 'Carry this', [], undefined),
+    );
+  const [first, repeat] = await Promise.all([newChat(), newChat()]);
+  assert.deepEqual([first, repeat], [true, false]);
+  // Neither chat is ever without the text: the one write has left the chat and carried it, and
+  // closing the transcript writes nothing more.
+  assert.equal(written.length, 1);
+  const kept = JSON.parse(written[0]!);
+  assert.equal(kept.selected, null);
+  assert.equal(kept.newDraft, 'Waiting\nCarry this');
+  assert.deepEqual(kept.drafts, []);
+  assert.equal((await f.state()).snapshot, null);
+  await f.reopen();
+  assert.equal((await f.state()).draft, 'Waiting\nCarry this');
+});
+
+test('/new moves nothing once its chat or draft has changed, so no draft is lost', async (t) => {
+  const f = await chatFixture(t);
+  await f.setDraft('New chat draft');
+  await openChat(f);
+  const other = { ...target, conversationId: 'other' };
+  let writes = 0;
+  f.storage.onWrite = () => writes++;
+  /** Moves the rest of `/new` typed in `selected` whose draft read `text`; why it didn't. */
+  const move = async (selected: typeof target | null, text: string) => {
+    writes = 0;
+    const moved = await f.run(
+      Effect.flatMap(ChatDrafts, (drafts) =>
+        drafts.moveToNewChat({ selected, text }, () => ({ text: 'Rest', mentions: [] })),
+      ).pipe(Effect.catch((error) => Effect.succeed(error.reason))),
+    );
+    assert.equal(writes, 0);
+    return moved;
+  };
+  const expectUnmoved = async (selected: typeof target | null, draft: string) => {
+    const state = await f.state();
+    assert.equal(state.selected?.conversationId, selected?.conversationId);
+    assert.equal(state.draft, draft);
+    assert.equal(saved(f).newDraft, 'New chat draft');
+  };
+  // The open chat's draft was edited after `/new` was typed: the edit stays.
+  await f.setDraft('/new\nRest, edited');
+  assert.equal(await move(target, '/new\nRest'), 'stale');
+  await expectUnmoved(target, '/new\nRest, edited');
+  // Another chat was chosen since, even one whose draft reads the same.
+  await f.select(other);
+  await f.setDraft('/new\nRest');
+  assert.equal(await move(target, '/new\nRest'), 'stale');
+  await expectUnmoved(other, '/new\nRest');
+  // The chat was left for the new chat since, as an earlier `/new` does.
+  await f.closeView();
+  assert.equal(await move(other, '/new\nRest'), 'stale');
+  // `/new` typed in the new chat whose draft has changed since.
+  assert.equal(await move(null, '/new\nOlder'), 'stale');
+  await expectUnmoved(null, 'New chat draft');
+  // Every draft survives a restart as it was.
+  await f.reopen();
+  assert.equal((await f.state()).draft, 'New chat draft');
+  await f.select(target);
+  assert.equal((await f.state()).draft, '/new\nRest, edited');
+  await f.select(other);
+  assert.equal((await f.state()).draft, '/new\nRest');
 });
 
 test('a model and effort preference survives selection, new chats and a restart', async (t) => {

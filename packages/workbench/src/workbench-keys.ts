@@ -5,7 +5,10 @@ import { cycleRecentTabs, type RecentTabs } from './editor-tabs/recent-tabs.tsx'
 import type { ExplorerPanel } from './explorer/explorer.tsx';
 import type { FocusOrigin, FocusReturn } from './focus-return.ts';
 import { pickerCommand, pickerMode, type PickerMode } from './picker/picker-shortcuts.ts';
+import type { Effect } from 'effect';
 import type { EditorActions } from './editor-actions.ts';
+import { useEditorTask } from './use-editor-task.ts';
+import type { WorkbenchServices } from './workbench-editor.ts';
 
 /**
  * The workbench's keys, outside dialogs, menus and fields other than the editor's: ⌘S saves, ⌘P
@@ -24,7 +27,6 @@ export function useWorkbenchKeys({
   openPicker,
   showPanel,
   closeFiles,
-  run,
 }: {
   actions: EditorActions;
   state: EditorSnapshot;
@@ -35,9 +37,9 @@ export function useWorkbenchKeys({
   findOrigin: (element: HTMLElement) => FocusOrigin;
   openPicker: (mode: PickerMode) => void;
   showPanel: (panel: ExplorerPanel) => void;
-  closeFiles: (paths: string[]) => Promise<boolean>;
-  run: (work: Promise<unknown>) => void;
+  closeFiles: (paths: string[]) => Effect.Effect<boolean, unknown, WorkbenchServices>;
 }) {
+  const run = useEditorTask(actions);
   const [recent, setRecent] = useState<RecentTabs | null>(null);
   const { withFocus } = focus;
   function keyDown(event: KeyboardEvent) {

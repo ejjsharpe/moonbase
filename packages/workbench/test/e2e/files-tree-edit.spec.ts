@@ -33,22 +33,23 @@ const exists = (page: Page, path: string) =>
     const listing = await client.command('listDirectory', { checkout, path: parent });
     return listing.entries.some((entry) => entry.path === path);
   }, path);
-/** Holds the first editor's next mutation until `release()`. */
-async function holdNextMutation(page: Page) {
-  await page.evaluate(() => {
+/** Holds the first editor's next mutation until `release()`; `failed` makes its reply say so. */
+async function holdNextMutation(page: Page, failed = false) {
+  await page.evaluate((failed) => {
     const { client } = window.demo,
       command = client.command;
     delete document.body.dataset.mutationReply;
-    client.command = async (name, input, options) => {
-      if (name !== 'mutate') return command(name, input, options);
+    client.command = (async (...args: Parameters<typeof command>) => {
+      if (args[0] !== 'mutate') return command.apply(client, args);
       client.command = command;
       await new Promise<void>((resolve) => {
         window.addEventListener('release-mutation', () => resolve(), { once: true });
         document.body.dataset.mutationReply = 'waiting';
       });
-      return command(name, input, options);
-    };
-  });
+      const reply = await command.apply(client, args);
+      return failed ? { ...reply, outcome: 'failed' } : reply;
+    }) as typeof command;
+  }, failed);
   return {
     waiting: () => expect(page.locator('body')).toHaveAttribute('data-mutation-reply', 'waiting'),
     release: () => page.evaluate(() => window.dispatchEvent(new Event('release-mutation'))),
@@ -341,6 +342,20 @@ test('an Enter commit left while it runs leaves focus and selection with the use
   await expect(input).toHaveCount(0);
   await expect(row(page, 'done.md')).toBeVisible();
   await expectTreeFocusedOn(page, 'welcome.ts');
+  // A failure only the field would show goes to the editor's alerts once the field has gone with
+  // the tree.
+  await row(page, 'done.md').click();
+  await tree(page).press('F2');
+  await input.fill('gone.md');
+  const gone = await holdNextMutation(page, true);
+  await input.press('Enter');
+  await gone.waiting();
+  const nav = region(page).getByRole('group', { name: 'Sidebar view', exact: true });
+  await nav.getByRole('button', { name: 'Changes', exact: true }).click();
+  await expect(tree(page)).toHaveCount(0);
+  await gone.release();
+  // The injected reply is the only failure in play, so the one alert is its.
+  await expect(region(page).getByRole('alert')).toBeVisible();
 });
 
 test('keys typed in the name field stay out of the tree', async ({ page }) => {

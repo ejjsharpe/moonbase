@@ -6,6 +6,7 @@ import { colors, syntax, type } from '@moonbase/ui/tokens.stylex';
 import { checkoutKey, fileKey, type EditorSnapshot } from '@moonbase/application/editor';
 import type { FileTarget, FileView } from '@moonbase/contracts/workspace';
 import type { EditorActions } from './editor-actions.ts';
+import { Effect } from 'effect';
 
 /** A one-shot request to put the cursor on a match, made after opening its file. */
 export type EditorReveal = {
@@ -159,12 +160,18 @@ export function MonacoView({
           const current = actions.buffer(buffer.target),
             text = model.getValue(undefined, true);
           if (current && current.text !== text)
-            void actions.edit(buffer.target, text).catch((error) => {
-              actions.report(error);
-              // The refused text goes; the buffer's stays.
-              const kept = actions.buffer(buffer.target);
-              if (kept && model.getValue(undefined, true) !== kept.text) model.setValue(kept.text);
-            });
+            actions.start(
+              actions.edit(buffer.target, text).pipe(
+                Effect.tapError(() =>
+                  Effect.sync(() => {
+                    // The refused text goes; the buffer's stays.
+                    const kept = actions.buffer(buffer.target);
+                    if (kept && model.getValue(undefined, true) !== kept.text)
+                      model.setValue(kept.text);
+                  }),
+                ),
+              ),
+            );
         });
         entry = { model, listener };
         models.current.set(key, entry);

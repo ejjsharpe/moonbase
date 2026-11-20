@@ -28,7 +28,7 @@ export function useDropTarget({
       const current = actions.getSnapshot().recovery.views.get(checkout.checkoutId)?.tree;
       if (!current || current.expanded.includes(path)) return;
       actions.tree(checkout, { expanded: [...current.expanded, path] });
-      void actions.list(checkout, path).catch(actions.report);
+      actions.start(actions.list(checkout, path));
     } catch (error) {
       actions.report(error);
     }

@@ -18,6 +18,7 @@ import type {
   WorkspaceEvent,
 } from '@moonbase/contracts/workspace';
 import { retryWatch, watchRetry } from '../../watch-retry.ts';
+import { awaitForCaller } from '../await-for-caller.ts';
 import { EditorError, isUnavailable, type EditorFailure } from '../editor-errors.ts';
 import { isRelativePath } from '../relative-path.ts';
 import { checkoutKey, sameCheckout } from '../recovery/recovery-references.ts';
@@ -92,7 +93,10 @@ export type EditorDiscoveryShape = {
     path: string,
     report?: boolean,
   ) => Effect.Effect<DirectoryListing, EditorFailure>;
-  /** Runs a workspace command in the checkout's reads, which closing it ends, reporting failures. */
+  /**
+   * Runs a workspace command in the checkout's reads, reporting failures. Closing the checkout ends
+   * it, and so does interrupting the caller: it is a read only the caller wants.
+   */
   readonly read: <A>(
     checkout: CheckoutTarget,
     effect: Effect.Effect<A, WorkspaceError>,
@@ -138,6 +142,15 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
         /** Runs `effect` in `scope`, so closing the scope ends it, reporting a failure. */
         const runIn = <A, E>(scope: Scope.Scope, effect: Effect.Effect<A, E>, report = true) =>
           Effect.flatMap(Effect.forkIn(effect, scope, { startImmediately: true }), Fiber.join).pipe(
+            Effect.tapError((error) => (report ? alerts.report(error) : Effect.void)),
+          );
+        /** `runIn` for a read only its caller wants: interrupting the caller ends it too. */
+        const runForCaller = <A, E>(
+          scope: Scope.Scope,
+          effect: Effect.Effect<A, E>,
+          report = true,
+        ) =>
+          awaitForCaller(Effect.forkIn(effect, scope, { startImmediately: true }), Fiber.join).pipe(
             Effect.tapError((error) => (report ? alerts.report(error) : Effect.void)),
           );
 
@@ -405,7 +418,8 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
               s.lostWatches.includes(checkoutKey(checkout)),
             ),
           list,
-          read: (checkout, effect, report = true) => runIn(checkoutScope(checkout), effect, report),
+          read: (checkout, effect, report = true) =>
+            runForCaller(checkoutScope(checkout), effect, report),
           refresh,
         } satisfies EditorDiscoveryShape;
       }),

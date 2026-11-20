@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { type ErrorGroup, getErrorGroup } from '@moonbase/contracts/error-groups';
 import { test } from 'node:test';
-import { Effect, ManagedRuntime } from 'effect';
-import { makeShellClients } from '../src/renderer/ipc/application-clients.ts';
+import { Effect, Layer, ManagedRuntime } from 'effect';
+import { DesktopNative } from '../src/renderer/ipc/desktop-native.ts';
 import { makeDesktopIpcLayer, toMessagePortLike } from '../src/renderer/ipc/desktop-ipc.ts';
 /** Whether a failure means `group` for its request. */
 const inGroup = (group: ErrorGroup) => (error: unknown) => getErrorGroup(error) === group;
@@ -25,19 +25,19 @@ test('a reply the renderer cannot decode is Incompatible, and a request its sche
   });
   port2.start();
   const runtime = ManagedRuntime.make(
-    makeDesktopIpcLayer(Effect.succeed(toMessagePortLike(port1))),
+    Layer.provide(
+      DesktopNative.layer({ connect: async () => {}, pathForFile: () => '' }),
+      makeDesktopIpcLayer(Effect.succeed(toMessagePortLike(port1))),
+    ),
   );
-  const shell = makeShellClients((effect, options) => runtime.runPromiseExit(effect, options), {
-    connect: async () => {},
-    pathForFile: () => '',
-  });
+  const native = await runtime.runPromise(DesktopNative);
   try {
-    await assert.rejects(shell.chatTargets(), inGroup('incompatible'));
+    await assert.rejects(runtime.runPromise(native.chooseChatFolder), inGroup('incompatible'));
     await assert.rejects(
-      shell.createChatWorktree('/root', 'chat\0branch', 'request'),
+      runtime.runPromise(native.createChatWorktree('/root', 'chat\0branch', 'request')),
       inGroup('refusal'),
     );
-    assert.deepEqual(sent, ['getChatTargets']);
+    assert.deepEqual(sent, ['chooseChatFolder']);
   } finally {
     await runtime.dispose();
     port2.close();

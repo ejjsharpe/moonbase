@@ -4,19 +4,25 @@ import {
   type ChatHostOptions,
 } from '@moonbase/application';
 import { editorLayer } from '@moonbase/application/editor';
-import { installTranscriptDemo } from './transcript.ts';
+import { installTranscriptDemo, toTranscriptNative } from './transcript.ts';
 import { chatCapabilities } from './chat.ts';
 import { createRoot } from 'react-dom/client';
 import { createRef, StrictMode, useState } from 'react';
-import { Context, Effect, Layer, ManagedRuntime } from 'effect';
+import { Context, Effect, Layer, ManagedRuntime, SubscriptionRef } from 'effect';
 import * as AtomRegistry from 'effect/reactivity/AtomRegistry';
 import { RegistryContext } from '@effect/atom-react';
 import { WorkspaceService } from '@moonbase/contracts/services';
 import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
+import { IpcClosedError } from '@moonbase/contracts/ipc-errors';
 import type { CommandInput, CommandOutput, WorkspaceCommand } from '@moonbase/contracts/workspace';
 import { makeEditorActions, makeWorkbenchEditor } from '@moonbase/workbench';
-import { DesktopShell, type DesktopShellHandle } from '../src/renderer/shell/desktop-shell.tsx';
+import {
+  DesktopShell,
+  type DesktopShellHandle,
+  type ShellNative,
+} from '../src/renderer/shell/desktop-shell.tsx';
 import type { DesktopApplication } from '../src/renderer/shell/desktop-application.ts';
+import { makeDesktopPlatform, type EditorNative } from '../src/renderer/shell/desktop-platform.ts';
 import { driveChat } from '@moonbase/application/testing/chat-fixture';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
 import { fauxWorkspace } from '@moonbase/application/testing/faux-workspace';
@@ -108,8 +114,40 @@ const memory = fauxWorkspace([
 ]);
 // The demo's views share one atom registry; each editor and its application is a window's.
 const registry = AtomRegistry.make();
-/** One window's composition root: the editor over the shared memory workspace, and its chat. */
-async function makeDemoWindow(clientId: string, chat: ChatHostOptions = {}) {
+/** The editor's actions as specs call them: each one returning an Effect runs it to a Promise. */
+type PromisedActions<T> = {
+  [K in keyof T]: T[K] extends (...args: infer P) => Effect.Effect<infer A, infer _E, never>
+    ? (...args: P) => Promise<A>
+    : T[K];
+};
+const promiseActions = <T extends object>(
+  actions: T,
+  run: <A, E>(effect: Effect.Effect<A, E>) => Promise<A>,
+): PromisedActions<T> =>
+  Object.fromEntries(
+    Object.entries(actions).map(([name, value]) => [
+      name,
+      typeof value === 'function'
+        ? (...args: unknown[]) => {
+            const result = (value as (...a: unknown[]) => unknown)(...args);
+            return Effect.isEffect(result) ? run(result as Effect.Effect<unknown>) : result;
+          }
+        : value,
+    ]),
+  ) as PromisedActions<T>;
+/** A spec's Promise answer, as the native capability's Effect. */
+/** A spec's answer as main's: a rejection is what main would fail with. */
+const promised = <A, E = never>(answer: () => Promise<A>) =>
+  Effect.tryPromise({ try: answer, catch: (error) => error as E });
+/**
+ * One window's composition root: the editor over the shared memory workspace, with `native` for
+ * its files tree, and its chat.
+ */
+async function makeDemoWindow(
+  clientId: string,
+  chat: ChatHostOptions = {},
+  native: EditorNative = {},
+) {
   const runtime = ManagedRuntime.make(
     Layer.provideMerge(
       MoonbaseApplication.layer(chat),
@@ -120,18 +158,14 @@ async function makeDemoWindow(clientId: string, chat: ChatHostOptions = {}) {
   const service = Context.get(context, MoonbaseApplication);
   await runtime.runPromise(service.start);
   const run = <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect);
-  const application: DesktopApplication = {
-    service,
-    atoms: makeApplicationAtoms(service),
-    run,
-    runSync: (effect) => runtime.runSync(effect),
-  };
-  const editor = makeWorkbenchEditor(context, run);
+  const application: DesktopApplication = { service, atoms: makeApplicationAtoms(service) };
+  const live = Effect.map(SubscriptionRef.get(service.phase), (phase) => phase === 'live');
+  const editor = makeWorkbenchEditor(context, makeDesktopPlatform(native, live));
   return {
     runtime,
     application,
     editor,
-    actions: makeEditorActions(editor, registry),
+    actions: promiseActions(makeEditorActions(editor, registry), run),
     dispose: () => run(service.release).finally(() => runtime.dispose()),
   };
 }
@@ -197,6 +231,23 @@ const firstWindow = await makeDemoWindow(
             );
           }),
         },
+    // The first window's files tree records what it copied and revealed, and asks specs for
+    // what to import.
+    {
+      pasteImports: (target) => promised(() => window.demo.selectClipboardImports(target)),
+      dropImports: (target, files) =>
+        promised(() => window.demo.selectDroppedImports(target, files)),
+      copyPaths: (target, paths, relative) =>
+        Effect.sync(() => {
+          window.demo.copied.push(
+            paths.map((path) => (relative ? path : `${target.root}/${path}`)).join('\n'),
+          );
+        }),
+      revealPath: (target, path) =>
+        Effect.sync(() => {
+          window.demo.revealed.push(`${target.root}/${path}`);
+        }),
+    },
   ),
   secondWindow = await makeDemoWindow('demo-second'),
   first = firstWindow.actions,
@@ -254,6 +305,42 @@ async function createChatWorktree(root: string, branch: string) {
   });
   return created.root;
 }
+const transcriptNative = transcriptDemo && toTranscriptNative(transcriptDemo.native);
+const transcripts = transcriptNative
+  ? { local: transcriptNative, remote: transcriptNative }
+  : undefined;
+/** The first window's native capabilities, which specs answer through `window.demo`. */
+const firstNative: ShellNative = {
+  transcripts,
+  chooseCheckout: promised(() => window.demo.selectCheckout()),
+};
+/** The design view's, which also chooses and lists chat folders and makes chat worktrees. */
+const designNative: ShellNative = {
+  ...firstNative,
+  chooseChatFolder: Effect.succeed('/demo/moonbase'),
+  listChatFolders: () =>
+    // `?unlistedFolders` lists none, as when main can't be reached.
+    new URLSearchParams(location.search).has('unlistedFolders')
+      ? Effect.fail(new IpcClosedError({ sent: false }))
+      : Effect.sync(() =>
+          // `?folders` lists enough recent folders for the menu to offer its filter.
+          new URLSearchParams(location.search).has('folders')
+            ? [
+                'notes',
+                'game-engine',
+                'dotfiles',
+                'blog',
+                'scratch',
+                'api',
+                'infra',
+                'design',
+                'tools',
+              ].map((name) => `/Users/demo/${name}`)
+            : ['/Users/demo/notes', '/demo/moonbase'],
+        ),
+  createChatWorktree: (root, branch) => promised(() => createChatWorktree(root, branch)),
+  turnChatIntoProject: (conversationId) => promised(() => chat.turnIntoProject(conversationId)),
+};
 function Demo() {
   const [visible, setVisible] = useState(true),
     [disposed, setDisposed] = useState(false),
@@ -264,39 +351,7 @@ function Demo() {
         <DesktopShell
           application={firstWindow.application}
           editor={firstWindow.editor}
-          transcriptNative={transcriptDemo ? () => transcriptDemo.native : undefined}
-          chooseChatFolder={async () => '/demo/moonbase'}
-          recentChatFolders={async () =>
-            // `?folders` lists enough recent folders for the menu to offer its filter.
-            new URLSearchParams(location.search).has('folders')
-              ? [
-                  'notes',
-                  'game-engine',
-                  'dotfiles',
-                  'blog',
-                  'scratch',
-                  'api',
-                  'infra',
-                  'design',
-                  'tools',
-                ].map((name) => `/Users/demo/${name}`)
-              : ['/Users/demo/notes', '/demo/moonbase']
-          }
-          createChatWorktree={createChatWorktree}
-          turnChatIntoProject={(conversationId) => chat.turnIntoProject(conversationId)}
-          selectCheckout={() => window.demo.selectCheckout()}
-          selectClipboardImports={(checkout) => window.demo.selectClipboardImports(checkout)}
-          copyPaths={async (target, paths, relative) => {
-            window.demo.copied.push(
-              paths.map((path) => (relative ? path : `${target.root}/${path}`)).join('\n'),
-            );
-          }}
-          revealPath={async (checkout, path) => {
-            window.demo.revealed.push(`${checkout.root}/${path}`);
-          }}
-          selectDroppedImports={(checkout, files) =>
-            window.demo.selectDroppedImports(checkout, files)
-          }
+          native={designNative}
         />
       </main>
     );
@@ -345,20 +400,7 @@ function Demo() {
             ref={firstHandle}
             application={firstWindow.application}
             editor={firstWindow.editor}
-            transcriptNative={transcriptDemo ? () => transcriptDemo.native : undefined}
-            selectCheckout={() => window.demo.selectCheckout()}
-            selectClipboardImports={(checkout) => window.demo.selectClipboardImports(checkout)}
-            copyPaths={async (target, paths, relative) => {
-              window.demo.copied.push(
-                paths.map((path) => (relative ? path : `${target.root}/${path}`)).join('\n'),
-              );
-            }}
-            revealPath={async (checkout, path) => {
-              window.demo.revealed.push(`${checkout.root}/${path}`);
-            }}
-            selectDroppedImports={(checkout, files) =>
-              window.demo.selectDroppedImports(checkout, files)
-            }
+            native={firstNative}
           />
         </section>
         {!disposed && (
@@ -375,7 +417,7 @@ const longTranscript = new URLSearchParams(location.search).get('long');
 if (transcriptDemo && longTranscript !== null)
   await transcriptDemo.long(Number(longTranscript) || undefined);
 if (transcriptDemo && new URLSearchParams(location.search).has('reading')) {
-  const services = (await firstWindow.application.run(firstApplication.chat.open))!;
+  const services = (await firstWindow.runtime.runPromise(firstApplication.chat.open))!;
   const opened = driveChat(firstWindow.runtime, services);
   await opened.start();
   await opened.select(chat.target);
@@ -428,7 +470,8 @@ declare global {
       second: typeof second;
       checkout: typeof checkout;
       memory: typeof memory;
-      workbench(): DesktopShellHandle;
+      /** The first window's shell, with Quit's preparation as a Promise. */
+      workbench(): { prepareQuit(): Promise<boolean> };
       application: typeof application;
       chat: typeof chat;
       transcript: typeof transcriptDemo;
@@ -461,7 +504,9 @@ window.demo = {
   revealed: [],
   checkout,
   memory,
-  workbench: () => firstHandle.current!,
+  workbench: () => ({
+    prepareQuit: () => firstWindow.runtime.runPromise(firstHandle.current!.prepareQuit),
+  }),
   modelCount: () => monaco.editor.getModels().length,
   diffReady: () =>
     monaco.editor.getDiffEditors().every((editor) => editor.getLineChanges() !== null),

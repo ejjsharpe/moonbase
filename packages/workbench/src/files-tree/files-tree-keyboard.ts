@@ -4,10 +4,13 @@ import type { FileCommand } from './file-commands.ts';
 import { isCommandKey, shortcutCommand } from '../shortcuts.ts';
 import type { VisibleRow } from './files-tree-rows.ts';
 import type { EditorActions } from '../editor-actions.ts';
+import type { WorkbenchWork } from '../workbench-editor.ts';
 
 /** What the tree's keyboard and pointer selection read and act on. */
 export type TreeNavigation = {
   actions: EditorActions;
+  /** Runs the tree's work for as long as it shows. */
+  run: (work: WorkbenchWork) => void;
   checkout: CheckoutTarget;
   rows: readonly VisibleRow[];
   focusIndex: number;
@@ -87,9 +90,11 @@ export function handleTreeKeyDown(event: KeyboardEvent<HTMLElement>, navigation:
     event.preventDefault();
     if (row.directory) toggle(row.path);
     else
-      void actions.open(
-        { checkout, path: row.path },
-        { view: 'file', intent: event.key === ' ' ? 'preview' : 'keep' },
+      navigation.run(
+        actions.open(
+          { checkout, path: row.path },
+          { view: 'file', intent: event.key === ' ' ? 'preview' : 'keep' },
+        ),
       );
   } else if (event.key === 'Escape' && !event.metaKey && !event.ctrlKey && !event.altKey) {
     if (navigation.cancelCut()) event.preventDefault();
@@ -117,6 +122,6 @@ export function handleRowClick(navigation: TreeNavigation, row: VisibleRow, addi
   }
   actions.tree(checkout, { focus: row.path, selected });
   if (!additive) {
-    void actions.open({ checkout, path: row.path }, { view: 'file', intent: 'preview' });
+    navigation.run(actions.open({ checkout, path: row.path }, { view: 'file', intent: 'preview' }));
   }
 }

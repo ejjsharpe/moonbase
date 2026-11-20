@@ -1,15 +1,20 @@
-import { useState } from 'react';
+import { useMemo } from 'react';
 import { useAtomValue } from '@effect/atom-react';
+import { Effect } from 'effect';
+import * as AsyncResult from 'effect/reactivity/AsyncResult';
+import * as Atom from 'effect/reactivity/Atom';
 import * as stylex from '@stylexjs/stylex';
 import { Button } from '@base-ui/react/button';
 import { Menu } from '@base-ui/react/menu';
-import type { CheckoutTarget, Worktree } from '@moonbase/contracts/workspace';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
+import { checkoutKey } from '@moonbase/application/editor';
 import { controls } from '@moonbase/ui/controls';
 import { overlays } from '@moonbase/ui/overlays';
 import { checkoutName, projectHue, projectInitials, projectTiles } from '@moonbase/ui/projects';
 import { colors, radius, space, type } from '@moonbase/ui/tokens.stylex';
 import { Icon } from '@moonbase/ui/icons';
 import type { EditorActions } from '../editor-actions.ts';
+import { useEditorTask } from '../use-editor-task.ts';
 
 /**
  * The project sidebar's header: the checkout's name and branch. It opens a menu of the
@@ -19,13 +24,11 @@ import type { EditorActions } from '../editor-actions.ts';
 export function WorktreeSwitcher({
   actions,
   checkout,
-  run,
 }: {
   actions: EditorActions;
   checkout: CheckoutTarget;
-  run(work: Promise<unknown>): void;
 }) {
-  const [worktrees, setWorktrees] = useState<readonly Worktree[] | null>(null);
+  const run = useEditorTask(actions);
   const initializing =
     useAtomValue(actions.editor.atoms.session).initializing === checkout.checkoutId;
   const name = checkoutName(checkout);
@@ -46,12 +49,7 @@ export function WorktreeSwitcher({
       </div>
     );
   return (
-    <Menu.Root
-      onOpenChange={(open) => {
-        if (!open) return;
-        setWorktrees(null);
-        run(actions.listWorktrees(checkout).then((result) => setWorktrees(result.worktrees)));
-      }}>
+    <Menu.Root>
       <Menu.Trigger
         aria-label={`Switch worktree, ${name} · ${checkout.branch}`}
         title={`${checkout.hostId} · ${checkout.root}`}
@@ -69,47 +67,69 @@ export function WorktreeSwitcher({
           <Menu.Popup
             aria-label="Worktrees"
             {...stylex.props(overlays.popup, overlays.menuPopup, styles.popup)}>
-            {worktrees === null ? (
-              <div role="status" {...stylex.props(styles.status)}>
-                Loading worktrees…
-              </div>
-            ) : (
-              worktrees.map((worktree) => {
-                const current = worktree.root === checkout.root;
-                const worktreeName = checkoutName(worktree);
-                return (
-                  <Menu.Item
-                    key={worktree.root}
-                    disabled={current}
-                    aria-label={`${worktreeName} · ${worktree.branch}${current ? ', current' : ''}`}
-                    {...stylex.props(overlays.menuItem, styles.item)}
-                    onClick={() => run(actions.openCheckout(worktree.root))}>
-                    <span
-                      aria-hidden="true"
-                      data-initials={projectInitials(worktreeName)}
-                      {...stylex.props(
-                        projectTiles.tile,
-                        projectHue(checkout.projectId),
-                        styles.itemTile,
-                      )}
-                    />
-                    <span {...stylex.props(styles.text)}>
-                      <span {...stylex.props(styles.name)}>{worktreeName}</span>
-                      <span {...stylex.props(styles.branch)}>
-                        {worktree.branch}
-                        {worktree.main ? ' · main worktree' : ''}
-                      </span>
-                    </span>
-                    {current && <span {...stylex.props(styles.current)}>✓</span>}
-                  </Menu.Item>
-                );
-              })
-            )}
+            <WorktreeList actions={actions} checkout={checkout} />
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>
     </Menu.Root>
   );
+}
+
+/**
+ * The repository's worktrees, listed each time the menu opens: closing it, or the checkout
+ * changing, interrupts a listing still running.
+ */
+function WorktreeList({ actions, checkout }: { actions: EditorActions; checkout: CheckoutTarget }) {
+  const run = useEditorTask(actions);
+  const { runtime } = actions.editor;
+  const key = checkoutKey(checkout);
+  const listing = useMemo(
+    () =>
+      Atom.setIdleTTL(
+        runtime.atom(
+          actions.listWorktrees(checkout).pipe(
+            Effect.map((result) => result.worktrees),
+            Effect.tapError((error) => Effect.sync(() => actions.report(error))),
+          ),
+        ),
+        0,
+      ),
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- the checkout is keyed by `key`.
+    [runtime, key],
+  );
+  const worktrees = useAtomValue(listing);
+  if (!AsyncResult.isSuccess(worktrees))
+    return AsyncResult.isFailure(worktrees) ? null : (
+      <div role="status" {...stylex.props(styles.status)}>
+        Loading worktrees…
+      </div>
+    );
+  return worktrees.value.map((worktree) => {
+    const current = worktree.root === checkout.root;
+    const worktreeName = checkoutName(worktree);
+    return (
+      <Menu.Item
+        key={worktree.root}
+        disabled={current}
+        aria-label={`${worktreeName} · ${worktree.branch}${current ? ', current' : ''}`}
+        {...stylex.props(overlays.menuItem, styles.item)}
+        onClick={() => run(actions.openCheckout(worktree.root))}>
+        <span
+          aria-hidden="true"
+          data-initials={projectInitials(worktreeName)}
+          {...stylex.props(projectTiles.tile, projectHue(checkout.projectId), styles.itemTile)}
+        />
+        <span {...stylex.props(styles.text)}>
+          <span {...stylex.props(styles.name)}>{worktreeName}</span>
+          <span {...stylex.props(styles.branch)}>
+            {worktree.branch}
+            {worktree.main ? ' · main worktree' : ''}
+          </span>
+        </span>
+        {current && <span {...stylex.props(styles.current)}>✓</span>}
+      </Menu.Item>
+    );
+  });
 }
 
 const styles = stylex.create({

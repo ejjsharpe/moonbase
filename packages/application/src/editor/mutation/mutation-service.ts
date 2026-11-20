@@ -314,6 +314,8 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
         state,
         replacePrompt: replacePrompt.shown,
         admits,
+        // A caller interrupted meanwhile waits for the mutation it started, so the gate stays
+        // taken until the mutation ends; closing the editor still interrupts the mutation.
         mutate: (action, options) =>
           Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
@@ -333,7 +335,7 @@ export class EditorMutations extends Context.Service<EditorMutations, EditorMuta
                   error: mutationUnavailable,
                   items: [],
                 } as MutationRunResult;
-              return yield* restore(session.run(apply(action, options))).pipe(
+              return yield* session.run(restore(apply(action, options))).pipe(
                 Effect.catchCause(() =>
                   Effect.succeed<MutationRunResult>({ completed: false, error: '', items: [] }),
                 ),

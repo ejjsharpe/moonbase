@@ -6,13 +6,20 @@ import { editorClientId } from '../ipc/editor-rpcs.ts';
 import { DesktopIpcLive, type DesktopIpc } from './ipc/desktop-ipc.ts';
 import { WorkspaceIpcLive } from './ipc/workspace-ipc.ts';
 import { callEffect } from './ipc/ipc-failures.ts';
-import { makeChatTargetPorts } from './ipc/application-clients.ts';
+import { makeChatTargetPorts } from './ipc/chat-target-ports.ts';
+import { DesktopNative } from './ipc/desktop-native.ts';
 
 const chatStorageKeys = { local: 'moonbase.chat.local.v1', remote: 'moonbase.chat.remote.v2' };
 
-/** The renderer's root runtime: main's procedures over this document's IPC port, and the workspace. */
+/**
+ * The renderer's root runtime: main's procedures over this document's IPC port, the workspace and
+ * main's native capabilities.
+ */
 export const makeIpcLayer = (bridge: DesktopBridge) =>
-  Layer.provideMerge(WorkspaceIpcLive, DesktopIpcLive(bridge));
+  Layer.provideMerge(
+    Layer.merge(WorkspaceIpcLive, DesktopNative.layer(bridge)),
+    DesktopIpcLive(bridge),
+  );
 
 /**
  * The document's editor and application, with the chat targets main names, built on the root

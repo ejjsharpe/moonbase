@@ -1,12 +1,6 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type DragEvent,
-  type RefObject,
-} from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type DragEvent } from 'react';
 import * as stylex from '@stylexjs/stylex';
+import { Effect } from 'effect';
 import { filesUI } from '@moonbase/ui/files';
 import type { CheckoutTarget, DirectoryListing } from '@moonbase/contracts/workspace';
 import { checkoutKey, type MutationAction } from '@moonbase/application/editor';
@@ -29,6 +23,7 @@ import type { DropTarget } from './use-drop-target.ts';
 import type { TreeFocus } from './use-tree-focus.ts';
 import type { RunMutation } from '../mutation-runner.tsx';
 import type { EditorActions } from '../editor-actions.ts';
+import { useEditorTask } from '../use-editor-task.ts';
 
 /**
  * The drag a files tree in this document started, until it ends. A tree accepts only its own:
@@ -68,7 +63,6 @@ export function useEntryDrag({
   runMutation,
   onMoved,
   setAnchor,
-  mounted,
   focus,
   target,
   findRowAt,
@@ -86,7 +80,6 @@ export function useEntryDrag({
   onMoved: (record: MoveRecord) => void;
   /** Sets the entry a Shift-selection extends from, or clears it. */
   setAnchor: (path: string | null) => void;
-  mounted: RefObject<boolean>;
   focus: TreeFocus;
   target: DropTarget;
   /** The listed row an event happened in, or undefined for the tree's empty area. */
@@ -94,6 +87,7 @@ export function useEntryDrag({
   closeMenu: () => void;
 }) {
   const checkoutIdentity = checkoutKey(checkout);
+  const run = useEditorTask(actions);
   const [dragged, setDragged] = useState<string[]>([]),
     ownDrag = useRef<TreeDrag | null>(null),
     endDrag = useRef(() => {});
@@ -145,38 +139,41 @@ export function useEntryDrag({
   }
   /**
    * Moves or copies dropped entries into `folder`, then expands it and selects them there. A batch
-   * that fails partway records and selects the entries it did move.
+   * that fails partway records and selects the entries it did move. The record is the move's own,
+   * kept even if the tree goes meanwhile; selecting and focusing go with the tree.
    */
-  async function dropEntries(paths: string[], folder: string, copy: boolean) {
-    const directories = new Map(
-      paths.map((path) => [path, isListedDirectory(listings, checkoutIdentity, path)]),
-    );
-    const result = await runMutation(
-      { checkout, kind: copy ? 'copy' : 'move', paths },
-      getDropDestination(paths, folder),
-      { finalFocus: focus.returnTreeFocus },
-    );
-    const transferred = listTransferred(paths, result);
-    if (!transferred.length) return;
-    const landed = listDroppedPaths(transferred, folder);
-    if (!copy)
-      onMoved({
-        kind: 'move',
-        moves: transferred.map((from, index) => ({
-          from,
-          to: landed[index],
-          directory: directories.get(from)!,
-        })),
-      });
-    if (!mounted.current) return;
-    try {
+  const dropEntries = (paths: string[], folder: string, copy: boolean) =>
+    Effect.gen(function* () {
+      const directories = new Map(
+        paths.map((path) => [path, isListedDirectory(listings, checkoutIdentity, path)]),
+      );
+      const result = yield* runMutation(
+        { checkout, kind: copy ? 'copy' : 'move', paths },
+        getDropDestination(paths, folder),
+        {
+          finalFocus: focus.returnTreeFocus,
+          settled: (result) => {
+            const transferred = listTransferred(paths, result);
+            if (copy || !transferred.length) return;
+            const landed = listDroppedPaths(transferred, folder);
+            onMoved({
+              kind: 'move',
+              moves: transferred.map((from, index) => ({
+                from,
+                to: landed[index],
+                directory: directories.get(from)!,
+              })),
+            });
+          },
+        },
+      );
+      const transferred = listTransferred(paths, result);
+      if (!transferred.length) return;
+      const landed = listDroppedPaths(transferred, folder);
       selectEntries(actions, checkout, landed);
-    } catch (error) {
-      actions.report(error);
-    }
-    setAnchor(landed[0]);
-    focus.refocusTree();
-  }
+      setAnchor(landed[0]);
+      focus.refocusTree();
+    });
   const isEntryDrag = (event: DragEvent) => event.dataTransfer.types.includes(entriesType);
   return {
     dragged,
@@ -253,7 +250,7 @@ export function useEntryDrag({
         paths = ours ? planDropInto(folder) : null,
         copy = event.altKey;
       endDrag.current();
-      if (paths) void dropEntries(paths, folder, copy);
+      if (paths) run(dropEntries(paths, folder, copy));
     },
   };
 }

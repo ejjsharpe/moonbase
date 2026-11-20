@@ -14,6 +14,8 @@ import { fileKey, type EditorSnapshot, type CheckoutView } from '@moonbase/appli
 import type { FocusReturn } from '../focus-return.ts';
 import { EditorTabMenu } from './editor-tab-menu.tsx';
 import type { EditorActions } from '../editor-actions.ts';
+import type { Effect } from 'effect';
+import type { WorkbenchServices } from '../workbench-editor.ts';
 
 /** A tab dragged along the strip: started on one tab and dropped onto another's place. */
 export type TabDrag = {
@@ -54,7 +56,6 @@ export function EditorTab({
   tabMotion,
   drag,
   tabRef,
-  run,
   closeFiles,
   withFocus,
 }: {
@@ -68,8 +69,7 @@ export function EditorTab({
   /** The strip's tab drag, which tabs start and drop onto one another. */
   drag: TabDrag;
   tabRef: (element: HTMLElement | null) => void | (() => void);
-  run: (work: Promise<unknown>) => void;
-  closeFiles: (paths: string[]) => Promise<boolean>;
+  closeFiles: (paths: string[]) => Effect.Effect<boolean, unknown, WorkbenchServices>;
   withFocus: FocusReturn['withFocus'];
 }) {
   // The tabs open when the menu opened, which its Close commands act on.
@@ -177,7 +177,8 @@ export function EditorTab({
           )}
           aria-label={`Close ${path}`}
           disabled={state.preserving}
-          onClick={() => run(closeFiles([path]))}>
+          // The editor's own work: closing unmounts this tab, and the close opens what is left.
+          onClick={() => actions.start(closeFiles([path]))}>
           {dirty ? (
             <>
               <span aria-hidden="true" {...stylex.props(workbench.unsavedDot)} />
@@ -204,7 +205,6 @@ export function EditorTab({
           keyboard.current = false;
           return opened;
         }}
-        run={run}
         closeFiles={closeFiles}
         withFocus={withFocus}
       />

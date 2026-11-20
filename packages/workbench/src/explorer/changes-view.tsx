@@ -7,6 +7,7 @@ import type { CheckoutTarget, FileTarget, FileView } from '@moonbase/contracts/w
 import { checkoutKey, type EditorSnapshot } from '@moonbase/application/editor';
 import { gitStatusMarks } from '../files-tree/files-tree-status.ts';
 import type { EditorActions } from '../editor-actions.ts';
+import { useEditorTask } from '../use-editor-task.ts';
 
 // A conflicted path opens as its file, where its conflict markers are resolved; one both sides
 // deleted has no file to open, and is resolved in Git.
@@ -27,7 +28,6 @@ export function ChangesView({
   checkout,
   target,
   mode,
-  run,
 }: {
   actions: EditorActions;
   state: EditorSnapshot;
@@ -35,8 +35,8 @@ export function ChangesView({
   /** The active file, and the view it shows in. */
   target: FileTarget | undefined;
   mode: FileView;
-  run: (work: Promise<unknown>) => void;
 }) {
+  const run = useEditorTask(actions);
   const git = state.git[checkoutKey(checkout)],
     changes = git?.changes ?? [];
   return (

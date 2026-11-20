@@ -126,8 +126,7 @@ test('a refresh neither cancels an open from a lookup nor keeps restarting its q
       });
     });
   const tick = () => editor.adjust('120 millis');
-  const openA = () =>
-    lookup.open((current) => editor.open(target('a.ts'), { intent: 'keep', current }));
+  const openA = () => lookup.open(target('a.ts'), { intent: 'keep' });
   try {
     lookup.query('a', [checkout]);
     const first = settled(1);
@@ -227,10 +226,7 @@ test('a failed open stays on screen through refreshes until the reader types aga
     await tick();
     await done;
     memory.failNext('readFile', 'a.ts was deleted');
-    assert.equal(
-      await lookup.open((current) => editor.open(target('a.ts'), { intent: 'keep', current })),
-      false,
-    );
+    assert.equal(await lookup.open(target('a.ts'), { intent: 'keep' }), false);
     assert.match(lookup.getSnapshot().message, /^File unavailable/);
     // A change on disk refreshes the rows but keeps the failure in view.
     const rows = lookup.getSnapshot().rows;

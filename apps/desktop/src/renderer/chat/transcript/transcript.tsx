@@ -2,7 +2,7 @@ import { useContext, useEffect, useMemo, useRef, useState, type RefObject } from
 import { Button } from '@base-ui/react/button';
 import type { LegendListRef } from '@legendapp/list/react';
 import * as stylex from '@stylexjs/stylex';
-import { Context, type Effect } from 'effect';
+import { Context } from 'effect';
 import { RegistryContext, useAtom, useAtomMount, useAtomValue } from '@effect/atom-react';
 import { controls } from '@moonbase/ui/controls';
 import { space } from '@moonbase/ui/tokens.stylex';
@@ -13,7 +13,7 @@ import {
   type ChatServices,
 } from '@moonbase/application/chat';
 import type { ChatTarget, ChatTranscriptSource } from '@moonbase/contracts/chat';
-import type { DesktopRunner } from '../../shell/desktop-application.ts';
+import { useRun } from '../../hooks/use-run.ts';
 import { MarkdownCache } from './markdown/markdown-model.ts';
 import { StoredImages } from './stored-image.tsx';
 import { useTranscriptActions, type TranscriptNative } from './transcript-actions.ts';
@@ -37,7 +37,6 @@ export function Transcript({
   backendId,
   target: shown,
   native,
-  runner,
 }: {
   /** The open chat's services, whose selection the transcript reads and acts on. */
   services: Context.Context<ChatServices>;
@@ -46,8 +45,6 @@ export function Transcript({
   /** The chat shown; a view saved after the selection moved on lands nowhere. */
   target: ChatTarget;
   native?: TranscriptNative;
-  /** The renderer root's runners, which the transcript's actions run on. */
-  runner: DesktopRunner;
 }) {
   const registry = useContext(RegistryContext);
   const selection = Context.get(services, ChatSelection);
@@ -72,13 +69,15 @@ export function Transcript({
   const ready = useAtomValue(atoms.ready);
   const transcript = useAtomValue(view.transcript);
   const held = useAtomValue(view.held);
-  const { notice, actions } = useTranscriptActions(native, { ready, transcript: latest }, runner);
+  const { notice, actions } = useTranscriptActions(native, { ready, transcript: latest });
+  // The transcript's own chat actions, which its unmounting ends.
+  const act = useRun();
   const [cache] = useState(() => new MarkdownCache());
   useEffect(() => () => cache.clear(), [cache]);
   const shared = useMemo<TranscriptShared>(
     () => ({
       selection,
-      act: (action: Effect.Effect<void>) => runner.run(action).catch(() => {}),
+      act,
       view,
       target,
       backendId,
@@ -86,7 +85,7 @@ export function Transcript({
       native,
       actions,
     }),
-    [selection, runner, view, target, backendId, cache, native, actions],
+    [selection, act, view, target, backendId, cache, native, actions],
   );
   const [jumping, jump] = useAtom(view.jumpToLatest, { mode: 'promise' });
   /** The last history read, which Retry repeats. */

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Effect, ManagedRuntime, Scope } from 'effect';
+import { Deferred, Effect, Exit, Fiber, Layer, ManagedRuntime, Ref, Scope } from 'effect';
 import type { WorkspaceEvent } from '@moonbase/contracts/workspace';
 import {
   toWorkspaceClient as makeEditorClient,
@@ -152,4 +152,36 @@ test('closing the editor interrupts a load and a save in flight and releases its
     for (const editor of editors) await editor.dispose();
     await f.dispose();
   }
+});
+
+test('work run for its caller is abandoned when the caller is interrupted as the work starts', async () => {
+  const program = Effect.gen(function* () {
+    const session = yield* EditorSession;
+    const gate = yield* Deferred.make<void>();
+    const applied = yield* Ref.make(false);
+    let work!: Fiber.Fiber<void>;
+    const caller = yield* Effect.forkChild(
+      Effect.withFiber((self) =>
+        session.runWithCaller(
+          Effect.withFiber((child) => {
+            work = child as Fiber.Fiber<void>;
+            // The caller is interrupted before it can wait on the work it just started.
+            self.interruptUnsafe();
+            return Effect.andThen(Deferred.await(gate), Ref.set(applied, true));
+          }),
+        ),
+      ),
+      { startImmediately: true },
+    );
+    const callerExit = yield* Fiber.await(caller);
+    yield* Deferred.succeed(gate, undefined);
+    const workExit = yield* Fiber.await(work);
+    return { callerExit, workExit, applied: yield* Ref.get(applied) };
+  });
+  const { callerExit, workExit, applied } = await Effect.runPromise(
+    Effect.provide(program, Layer.fresh(EditorSession.layer({ clientId: 'caller' }))),
+  );
+  assert.ok(Exit.hasInterrupts(callerExit));
+  assert.ok(Exit.hasInterrupts(workExit));
+  assert.equal(applied, false);
 });

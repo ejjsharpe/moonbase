@@ -6,6 +6,7 @@ import {
   useState,
   type RefObject,
 } from 'react';
+import { Effect } from 'effect';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { checkoutKey } from '@moonbase/application/editor';
 import type { EditorActions } from './editor-actions.ts';
@@ -97,13 +98,17 @@ export function useFocusReturn({
     return () => document?.removeEventListener('keydown', onExternalTab, true);
   }, [actions, root]);
   /**
-   * Returns focus to `origin` once `opening` settles with the file open, or with `restore`
+   * Returns focus to `origin` once `opening` succeeds with the file open, or with `restore`
    * whatever its outcome.
    */
-  function withFocus(opening: Promise<boolean>, origin: FocusOrigin, restore = false) {
+  function withFocus<E, R>(
+    opening: Effect.Effect<boolean, E, R>,
+    origin: FocusOrigin,
+    restore = false,
+  ) {
     const from = document.activeElement;
     const started = interaction.current;
-    const focus = () => {
+    const focus = Effect.sync(() => {
       const next = actions.getSnapshot().recovery;
       if (checkout && next.openCheckoutIds.includes(checkout.checkoutId))
         setRequest({
@@ -113,15 +118,10 @@ export function useFocusReturn({
           from,
           interaction: started,
         });
-    };
-    return opening.then(
-      (success) => {
-        if (success || restore) focus();
-      },
-      (error) => {
-        if (restore) focus();
-        throw error;
-      },
+    });
+    return opening.pipe(
+      Effect.tap((success) => (success || restore ? focus : Effect.void)),
+      Effect.tapError(() => (restore ? focus : Effect.void)),
     );
   }
   return {

@@ -11,7 +11,6 @@ import {
 } from 'react';
 import { Button } from '@base-ui/react/button';
 import { Dialog } from '@base-ui/react/dialog';
-import { Effect } from 'effect';
 import * as Atom from 'effect/reactivity/Atom';
 import * as AsyncResult from 'effect/reactivity/AsyncResult';
 import { useAtomRefresh, useAtomValue } from '@effect/atom-react';
@@ -58,7 +57,7 @@ const makeImageUrls = (native: TranscriptNative) =>
       selection: { partId: part.partId, bytes: part.bytes, revision: part.revision },
       mimeType: part.mimeType as TranscriptImage['mimeType'],
     };
-    return Atom.make(Effect.tryPromise((signal) => native.imageUrl(image, signal)));
+    return Atom.make(native.imageUrl(image));
   });
 
 export function StoredImages({

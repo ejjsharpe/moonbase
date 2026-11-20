@@ -11,12 +11,18 @@ export type {
 export {
   ChatRefusedError,
   DraftStorageError,
+  NewChatDraftError,
   describeChatFailure,
   type ChatRefusalReason,
 } from './chat-errors.ts';
 export { ChatConfig } from './chat-config.ts';
 export { ChatActions, type ChatActionsShape } from './actions/actions-service.ts';
-export { ChatDrafts, type ChatDraftsShape, type DraftsState } from './drafts/drafts-service.ts';
+export {
+  ChatDrafts,
+  type ChatDraftsShape,
+  type DraftOrigin,
+  type DraftsState,
+} from './drafts/drafts-service.ts';
 export type { Pending, Saved } from './drafts/drafts.ts';
 export { ChatLink, type ChatLinkShape, type LinkState } from './link/link-service.ts';
 export { ChatConnection, type ChatConnectionShape } from './connection/connection-service.ts';

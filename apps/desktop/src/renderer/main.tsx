@@ -11,17 +11,14 @@ import {
 import { EditorAlerts } from '@moonbase/application/editor';
 import { makeWorkbenchEditor, type WorkbenchEditor } from '@moonbase/workbench';
 import { configureMonacoWorkers } from '@moonbase/workbench/workers';
-import { CancelledError } from '@moonbase/contracts/errors';
-import { DesktopShell, type DesktopShellHandle } from './shell/desktop-shell.tsx';
+import { DesktopShell, type DesktopShellHandle, type ShellNative } from './shell/desktop-shell.tsx';
 import type { DesktopApplication } from './shell/desktop-application.ts';
+import { makeDesktopPlatform } from './shell/desktop-platform.ts';
 import { WorkbenchStartupFailure } from './shell/startup-failure.tsx';
 import type { DesktopBridge } from '../ipc/desktop-bridge.ts';
 import { makeWindowFailure, type WindowFailure } from '../ipc/ipc-errors.ts';
-import {
-  makeChatTargetClients,
-  makeShellClients,
-  type DesktopIpcRunner,
-} from './ipc/application-clients.ts';
+import { DesktopNative } from './ipc/desktop-native.ts';
+import { makeWindowActions } from './ipc/window-actions.ts';
 import { makeDocumentLayer, makeIpcLayer } from './renderer-layer.ts';
 import * as stylex from '@stylexjs/stylex';
 import { workbench } from '@moonbase/ui/workbench';
@@ -35,35 +32,30 @@ declare global {
 }
 document.body.className = stylex.props(workbench.document).className ?? '';
 const root = createRoot(document.getElementById('root')!);
-const targetClients = new Map<string, ReturnType<typeof makeChatTargetClients>>();
-/** Captured per target once, so a selected target change cannot reroute a pending action. */
-function getTargetClients(target: 'local' | 'remote'): ReturnType<typeof makeChatTargetClients> {
-  let clients = targetClients.get(target);
-  if (!clients) targetClients.set(target, (clients = makeChatTargetClients(runIpc, target)));
-  return clients;
-}
 // The renderer's one runtime: every request to main runs here, over this document's IPC port,
-// and it holds the workspace, the editor and the application.
+// and it holds the workspace, main's native capabilities, the editor and the application. Views
+// run their actions through atom functions; only this root runs Effects itself.
 const runtime = ManagedRuntime.make(makeIpcLayer(window.moonbase));
-/** The root's runner for the shell's and transcripts' Promise clients over IPC. */
-const runIpc: DesktopIpcRunner = (effect, options) => runtime.runPromiseExit(effect, options);
 /** Where the editor and application live, closed as the document goes, before main is told. */
 const documentScope = Scope.makeUnsafe();
 /** A failure as the window's lifecycle reports it to main: Moonbase's text of it. */
 const toWindowError = (error: unknown) => makeWindowFailure(describeApplicationFailure(error));
-const shell = makeShellClients(runIpc, window.moonbase);
+const windowActions = makeWindowActions();
 /** Runs main's window actions through `on` for as long as the document lives, each once. */
 function useWindowActions(
   on: (action: 'quit' | 'dispose' | 'cleanup-error', id: string, error?: WindowFailure) => void,
   dependency: unknown,
 ) {
   useEffect(() => {
-    const close = shell.watchWindowActions((action) =>
-      action.action === 'cleanup-error'
-        ? on(action.action, '', action.error)
-        : on(action.action, action.id),
+    const watching = runtime.runFork(
+      windowActions.watch((action) =>
+        action.action === 'cleanup-error'
+          ? on(action.action, '', action.error)
+          : on(action.action, action.id),
+      ),
     );
-    return () => void close().catch(() => {});
+    // Interrupting stops delivery at once, then ends the watch.
+    return () => watching.interruptUnsafe();
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- one watch per dependency
   }, [dependency]);
 }
@@ -72,31 +64,35 @@ function useWindowActions(
  * answer is sent again while main can't be reached, and whenever main asks again.
  */
 const answerQuit = (id: string, consent: boolean, cleanupError?: WindowFailure) =>
-  void shell.answerQuit(id, consent, cleanupError).catch(() => {});
+  void runtime.runFork(Effect.ignore(windowActions.answerQuit(id, consent, cleanupError)));
 function Desktop({
   application,
   editor,
+  native,
 }: {
   application: DesktopApplication;
   editor: WorkbenchEditor;
+  native: ShellNative;
 }) {
   const handle = useRef<DesktopShellHandle>(null),
     [closing, setClosing] = useState(false),
     [releasing, setReleasing] = useState(false);
-  async function prepareQuit(id: string) {
-    try {
-      const consent = await handle.current!.prepareQuit();
-      if (consent) flushSync(() => setClosing(true));
-      answerQuit(id, consent);
-    } catch (error) {
-      void editor.run(Context.get(editor.context, EditorAlerts).report(error));
-      answerQuit(id, false);
-    }
+  function prepareQuit(id: string) {
+    runtime.runPromise(handle.current!.prepareQuit).then(
+      (consent) => {
+        if (consent) flushSync(() => setClosing(true));
+        answerQuit(id, consent);
+      },
+      (error: unknown) => {
+        runtime.runFork(Context.get(editor.context, EditorAlerts).report(error));
+        answerQuit(id, false);
+      },
+    );
   }
   useWindowActions((action, id, error) => {
     if (action === 'cleanup-error' && error)
-      void application.run(application.service.reportCleanup(error));
-    if (action === 'quit') void prepareQuit(id);
+      runtime.runFork(application.service.reportCleanup(error));
+    if (action === 'quit') prepareQuit(id);
     if (action === 'dispose') {
       flushSync(() => {
         setClosing(true);
@@ -124,18 +120,7 @@ function Desktop({
       application={application}
       editor={editor}
       closing={closing}
-      transcriptNative={(target) => getTargetClients(target as 'local' | 'remote').transcript}
-      chooseChatFolder={shell.chooseChatFolder}
-      recentChatFolders={(target) => shell.listChatFolders(target as 'local' | 'remote')}
-      createChatWorktree={shell.createChatWorktree}
-      turnChatIntoProject={shell.turnChatIntoProject}
-      selectCheckout={async () => (isLive() ? shell.chooseCheckout() : null)}
-      selectClipboardImports={async (checkout) => (isLive() ? shell.pasteImports(checkout) : [])}
-      copyPaths={shell.copyPaths}
-      revealPath={shell.revealPath}
-      selectDroppedImports={async (checkout, files) =>
-        isLive() ? ((await shell.dropImports(checkout, files)) ?? []) : []
-      }
+      native={native}
     />
   );
 }
@@ -150,7 +135,6 @@ function StartupFailure({ error }: { error: WindowFailure }) {
   return <WorkbenchStartupFailure message={error.message} />;
 }
 
-const cancelled = () => new CancelledError({ operation: 'The action' });
 /**
  * Releases the application, then the editor with the document's scope; the IPC runtime stays to
  * answer main. Joins a release running.
@@ -161,7 +145,6 @@ const release = () =>
   (released ??= runtime
     .runPromise(releaseApplication)
     .finally(() => runtime.runPromise(Scope.close(documentScope, Exit.void))));
-let isLive = () => false;
 
 try {
   configureMonacoWorkers();
@@ -171,33 +154,17 @@ try {
   const service = Context.get(context, MoonbaseApplication);
   releaseApplication = service.release;
   await runtime.runPromise(service.start);
-  /**
-   * Runs an action on the root runtime. One interrupted, or run once the runtime has gone (the
-   * document closing), rejects as cancelled, which is never reported: no runtime text reaches
-   * the view.
-   */
-  const run = <A, E>(effect: Effect.Effect<A, E>): Promise<A> =>
-    runtime.runPromiseExit(effect).then(
-      (exit) => {
-        if (Exit.isSuccess(exit)) return exit.value;
-        const reason = exit.cause.reasons.find(
-          (item) => item._tag === 'Fail' || item._tag === 'Die',
-        );
-        if (reason?._tag === 'Fail') throw reason.error;
-        throw reason?._tag === 'Die' ? reason.defect : cancelled();
-      },
-      () => {
-        throw cancelled();
-      },
-    );
-  const application: DesktopApplication = {
-    service,
-    atoms: makeApplicationAtoms(service),
-    run,
-    runSync: (effect) => runtime.runSync(effect),
+  const native = await runtime.runPromise(DesktopNative);
+  /** Whether the application is live, so a project may still open or files arrive. */
+  const live = Effect.map(SubscriptionRef.get(service.phase), (phase) => phase === 'live');
+  const application: DesktopApplication = { service, atoms: makeApplicationAtoms(service) };
+  const editor = makeWorkbenchEditor(context, makeDesktopPlatform(native, live));
+  const shellNative: ShellNative = {
+    ...native,
+    chooseCheckout: Effect.flatMap(live, (isLive) =>
+      isLive ? native.chooseCheckout : Effect.succeed(null),
+    ),
   };
-  const editor = makeWorkbenchEditor(context, run);
-  isLive = () => SubscriptionRef.getUnsafe(service.phase) === 'live';
   window.addEventListener('beforeunload', (event) => {
     if (!runtime.runSync(service.canUnload)) {
       event.preventDefault();
@@ -211,7 +178,7 @@ try {
   });
   root.render(
     <RegistryProvider>
-      <Desktop application={application} editor={editor} />
+      <Desktop application={application} editor={editor} native={shellNative} />
     </RegistryProvider>,
   );
 } catch (error) {

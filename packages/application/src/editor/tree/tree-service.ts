@@ -18,6 +18,7 @@ import type {
   DirectoryListing,
   FileTarget,
 } from '@moonbase/contracts/workspace';
+import { awaitForCaller } from '../await-for-caller.ts';
 import { EditorError, type EditorFailure } from '../editor-errors.ts';
 import { isRelativePath } from '../relative-path.ts';
 import { EditorSession } from '../session/session-service.ts';
@@ -56,8 +57,8 @@ export type EditorTreeShape = {
    * it. Levels already listed (the watcher keeps them fresh) are not listed again. While Hide
    * Ignored Files is on, a Git-ignored file (or one in an ignored folder) turns it off, or with
    * `ignored: 'skip'` is left unrevealed; only levels Git hasn't classified yet are asked about. A
-   * newer reveal in the same checkout cancels this one, and it, closing the checkout or `current`
-   * returning false abandons it before it changes the tree. Succeeds whether the file was revealed.
+   * newer reveal in the same checkout cancels this one, and it, closing the checkout or interrupting
+   * it abandons it before it changes the tree. Succeeds whether the file was revealed.
    */
   readonly reveal: (
     target: FileTarget,
@@ -151,6 +152,8 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
                   );
                 },
               );
+              // Activating replaces the idle read in the activation handle, so it follows the read.
+              let activate = false;
               yield* tabs.whileIdle(
                 Effect.gen(function* () {
                   const comparison = yield* workspace.readComparison({ target, area: mode });
@@ -172,12 +175,16 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
                     working &&
                     (yield* views.get).recovery.selectedCheckoutId === checkout.checkoutId
                   )
-                    yield* tabs.activateSelected;
+                    activate = true;
                 }).pipe(
                   // A failed refresh retains the last comparison and current edits.
                   Effect.ignore,
                 ),
               );
+              // Activated after the idle read returns: the read runs in the same handle the
+              // activation would replace. It stays idle-guarded only because the read's exit
+              // resumes this fiber synchronously and nothing here waits before the open starts.
+              if (activate) yield* tabs.activateSelected;
             }).pipe(Effect.ignore),
           });
         });
@@ -207,16 +214,16 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
         });
 
       const reveal: EditorTreeShape['reveal'] = (target, options = {}) =>
-        session.admitted(
+        session.runWithCaller(
           Effect.gen(function* () {
+            yield* session.admit;
             yield* views.view(target.checkout);
             if (!isRelativePath(target.path))
               return yield* new EditorError({ reason: 'invalid-path' });
             const checkout = target.checkout,
               report = !options.quiet;
-            const isCurrent = Effect.map(
-              views.get,
-              ({ recovery }) => isCheckoutOpen(recovery, checkout) && (options.current?.() ?? true),
+            const isCurrent = Effect.map(views.get, ({ recovery }) =>
+              isCheckoutOpen(recovery, checkout),
             );
             const findListed = (path: string) =>
               SubscriptionRef.getUnsafe(discovery.state).listings[
@@ -277,8 +284,10 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
                 ),
               ),
             );
-            const fiber = yield* FiberMap.run(reveals, checkoutKey(checkout))(work);
-            const exit = yield* Fiber.await(fiber);
+            const exit = yield* awaitForCaller(
+              FiberMap.run(reveals, checkoutKey(checkout))(work),
+              Fiber.await,
+            );
             if (Exit.isSuccess(exit)) return exit.value;
             // A newer reveal in the checkout replaced this one.
             if (!Exit.hasFails(exit)) return false;

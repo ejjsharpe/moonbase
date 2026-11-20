@@ -246,9 +246,17 @@ export class EditorCheckouts extends Context.Service<EditorCheckouts, EditorChec
             }),
           ),
         selectCheckout: (target) => session.admitted(selectOpenCheckout(target)),
+        // A read only its caller wants, in the checkout's reads: interrupting the caller or
+        // closing the checkout ends it.
         listWorktrees: (checkout) =>
-          session.admitted(
-            Effect.andThen(views.view(checkout), reported(workspace.listWorktrees({ checkout }))),
+          session.runWithCaller(
+            Effect.andThen(
+              session.admit,
+              Effect.andThen(
+                views.view(checkout),
+                discovery.read(checkout, workspace.listWorktrees({ checkout })),
+              ),
+            ),
           ),
         createWorktree: (input) =>
           session.admitted(

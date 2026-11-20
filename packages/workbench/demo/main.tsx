@@ -4,7 +4,12 @@ import { Effect, ManagedRuntime } from 'effect';
 import { RegistryContext } from '@effect/atom-react';
 import { WorkspaceService } from '@moonbase/contracts/workspace-service';
 import type { OperationResult, WorkspaceOperation } from '@moonbase/contracts/workspace';
-import { isFileDropTaken, Workbench, type WorkbenchHandle } from '../src/index.ts';
+import {
+  isFileDropTaken,
+  Workbench,
+  type WorkbenchHandle,
+  type WorkbenchPlatformShape,
+} from '../src/index.ts';
 import {
   buildDemoEditor,
   makeDemoClient,
@@ -101,11 +106,32 @@ const client: typeof raw = {
 // Specs may swap `window.demo.client`; before it exists the editors load through `client`.
 const workspace = makeDemoWorkspace(base, () => window.demo?.client ?? client);
 const registry = makeDemoRegistry();
-const [firstEditor, secondEditor] = await Promise.all(
-  ['demo-first', 'demo-second'].map((clientId) =>
-    buildDemoEditor(runtime, registry, workspace, clientId),
-  ),
-);
+/** A spec's Promise answer, as the platform's Effect. */
+const promised = <A,>(answer: () => Promise<A>) =>
+  Effect.tryPromise({ try: answer, catch: (error) => error });
+// The first editor's platform records what it was asked and answers through `window.demo`.
+const firstPlatform: WorkbenchPlatformShape = {
+  selectNativeImports: () => promised(() => window.demo.selectNativeImports()),
+  copyPaths: (target, paths, relative) =>
+    Effect.sync(() => {
+      window.demo.copied.push(
+        paths.map((path) => (relative ? path : `${target.root}/${path}`)).join('\n'),
+      );
+    }),
+  revealPath: (target, path) =>
+    Effect.sync(() => {
+      window.demo.revealed.push(`${target.root}/${path}`);
+    }),
+  selectClipboardImports: new URLSearchParams(location.search).has('clipboard')
+    ? () => promised(() => window.demo.selectClipboardImports())
+    : undefined,
+  selectDroppedImports: (target, files) =>
+    promised(() => window.demo.selectDroppedImports(target, files)),
+};
+const [firstEditor, secondEditor] = await Promise.all([
+  buildDemoEditor(runtime, registry, workspace, 'demo-first', firstPlatform),
+  buildDemoEditor(runtime, registry, workspace, 'demo-second'),
+]);
 const first = firstEditor.handle,
   second = secondEditor.handle;
 const firstHandle = createRef<WorkbenchHandle>();
@@ -207,24 +233,7 @@ function Demo() {
                 ? ({ editor }) => editor
                 : undefined
             }
-            selectNativeImports={() => window.demo.selectNativeImports()}
-            copyPaths={async (target, paths, relative) => {
-              window.demo.copied.push(
-                paths.map((path) => (relative ? path : `${target.root}/${path}`)).join('\n'),
-              );
-            }}
-            revealPath={async (target, path) => {
-              window.demo.revealed.push(`${target.root}/${path}`);
-            }}
             mentionInChat={(_target, paths) => window.demo.mentioned.push(paths)}
-            selectClipboardImports={
-              new URLSearchParams(location.search).has('clipboard')
-                ? () => window.demo.selectClipboardImports()
-                : undefined
-            }
-            selectDroppedImports={(target, files) =>
-              window.demo.selectDroppedImports(target, files)
-            }
           />
         </section>
         {!disposed && (

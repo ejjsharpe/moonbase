@@ -162,3 +162,19 @@ test('a watch that fails with an unknown error shows fixed text, never its messa
   assert(!state.error.includes('SYNTHETIC_PRIVATE_SENTINEL'));
   assert.equal(f.subscriptions, 0);
 });
+
+test('closing the chat a move to the new chat left leaves a chat chosen since open', async (t) => {
+  const f = await chatFixture(t);
+  await openChat(f);
+  const other = { ...target, conversationId: 'other' };
+  await f.select(other);
+  await until(f, (s) => s.ready && s.snapshot?.conversation.target.conversationId === 'other');
+  const closeDeselected = (closed: typeof target) =>
+    f.run(Effect.flatMap(ChatSelection, (selection) => selection.closeDeselected(closed)));
+  // The chat `/new` left was superseded, and the one selected is not deselected.
+  await closeDeselected(target);
+  await closeDeselected(other);
+  const state = await f.state();
+  assert.equal(state.selected?.conversationId, 'other');
+  assert.equal(state.snapshot?.conversation.target.conversationId, 'other');
+});

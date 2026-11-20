@@ -3,6 +3,7 @@ import { Button } from '@base-ui/react/button';
 import { controls } from '@moonbase/ui/controls';
 import type { EditorSnapshot } from '@moonbase/application/editor';
 import type { EditorActions } from './editor-actions.ts';
+import { useEditorTask } from './use-editor-task.ts';
 
 /**
  * The editor's alerts: its latest error, recent edits not yet kept for recovery, and file
@@ -12,13 +13,12 @@ export function StatusMessages({
   actions,
   state,
   retryRecovery,
-  run,
 }: {
   actions: EditorActions;
   state: EditorSnapshot;
   retryRecovery: () => void;
-  run: (work: Promise<unknown>) => void;
 }) {
+  const run = useEditorTask(actions);
   return (
     <>
       {!!state.errors.length && (

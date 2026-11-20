@@ -1,9 +1,15 @@
-import { isAccessRefusal, isCancelled, isUncertain } from '@moonbase/contracts/error-groups';
+import {
+  isAccessRefusal,
+  isCancelled,
+  isKnownError,
+  isUncertain,
+} from '@moonbase/contracts/error-groups';
 import {
   Cause,
   Context,
   Effect,
   Exit,
+  Fiber,
   FiberSet,
   Layer,
   Option,
@@ -18,7 +24,9 @@ import type {
   ChatModelPreference,
   ChatTarget,
 } from '@moonbase/contracts/chat';
-import { describeChatOutcome } from '../chat-errors.ts';
+import { isEditorError } from '../../editor/editor-errors.ts';
+import { describeChatOutcome, NewChatDraftError } from '../chat-errors.ts';
+import type { ChatDraftsShape, DraftOrigin } from '../drafts/drafts-service.ts';
 import type { ChatState } from '../chat-state.ts';
 import { rebaseMentions } from './mention-text.ts';
 import { chatWorktreeBranch } from './worktree-branch.ts';
@@ -42,8 +50,11 @@ export type ComposerChat = {
   /** Signals each change to the chat's state. */
   readonly changes: Stream.Stream<void>;
   readonly setDraft: (value: string, mentions?: readonly ChatMention[]) => Effect.Effect<void>;
+  /** Moves a draft to the new chat in one write (`ChatDrafts.moveToNewChat`). */
+  readonly moveToNewChat: ChatDraftsShape['moveToNewChat'];
   readonly send: (settings?: ChatCreationSettings) => Effect.Effect<void>;
-  readonly closeView: Effect.Effect<void>;
+  /** Closes a chat the drafts' move deselected (`ChatSelection.closeDeselected`). */
+  readonly closeDeselected: (target: ChatTarget) => Effect.Effect<void>;
   readonly select: (target: ChatTarget) => Effect.Effect<void>;
 };
 /** Makes a linked worktree of `root` on `branch` under `requestId`, succeeding with its root. */
@@ -83,16 +94,38 @@ export type ChatComposer = {
     options: { selection?: ChatModelPreference; createWorktree?: CreateWorktree },
   ) => Effect.Effect<void>;
   /**
-   * Opens a new chat with `text`, carried from the open chat (`/new` with lines after it), whose
-   * mentions were picked in the open chat's `folder`. The open chat's draft is cleared and the
-   * text joins the new chat's draft; false when it can't, and stays in the open chat instead.
+   * Opens a new chat with `text`, carried from the chat `from` typed `/new` in (with lines after
+   * it), whose mentions were picked in the open chat's `folder`. The open chat's draft is cleared
+   * and the text joins the new chat's draft; false when it can't, and stays in the open chat
+   * instead, or when the chat or its draft is no longer `from` (a repeated command), which moves
+   * nothing. It belongs to the composer: a caller that is interrupted only stops waiting.
    */
   readonly startNewChat: (
+    from: DraftOrigin,
     text: string,
     mentions: readonly ChatMention[],
     folder: string | undefined,
   ) => Effect.Effect<boolean>;
+  /**
+   * Turns chat `id` into a project with `turn` (its folder opened as one where it is) as the
+   * composer's own work, listed in `turning` until it settles: a view that goes away meanwhile
+   * leaves it running, and why it failed is the chat's message. A chat already turning is left to
+   * it.
+   */
+  readonly turnIntoProject: (id: string, turn: Effect.Effect<void, unknown>) => Effect.Effect<void>;
 };
+
+/**
+ * Why a chat couldn't become a project: a shared outcome's fixed text, or the message main, the
+ * workspace or the editor built from an error's fields; anything else adds nothing to the fixed
+ * text, so no text a host or defect wrote reaches the view.
+ */
+function describeTurnFailure(error: unknown): string {
+  const why =
+    describeChatOutcome(error) ??
+    (isKnownError(error) || isEditorError(error) ? (error as Error).message : '');
+  return `The chat could not become a project. ${why}`.trim();
+}
 
 type WorktreeRequest = { key: string; cwd: string; branch: string; requestId: string };
 type MadeWorktree = { place: ComposerPlace; root: string; from: string };
@@ -116,7 +149,10 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
     /** Worktrees a place made, kept as its folder until a chat is created in one. */
     const made = yield* Ref.make<Readonly<Record<string, MadeWorktree>>>({});
     const selected = yield* Ref.make((yield* chat.state).selected?.conversationId ?? null);
+    /** Worktrees and projects being made, which outlive the view that asked. */
     const creations = yield* FiberSet.make<void, never>();
+    /** Commands the composer runs for a view, which outlive it. */
+    const commands = yield* FiberSet.make<boolean, never>();
     /** Sends the composer started: each runs as the chat's action, which shows its outcome. */
     const sending = yield* FiberSet.make<void, never>();
     const startSend = (settings?: ChatCreationSettings) =>
@@ -261,6 +297,50 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
         );
       });
 
+    /**
+     * `/new`: the drafts move in one write before the transcript closes, so nothing the view does
+     * meanwhile (closing it, say) can leave the text in neither chat. The write checks that the
+     * chat and its draft are still the ones the command was typed in, so a repeated or stale
+     * command never writes over what an earlier one moved.
+     */
+    const startNewChat = (
+      from: DraftOrigin,
+      text: string,
+      mentions: readonly ChatMention[],
+      folder: string | undefined,
+    ) =>
+      Effect.gen(function* () {
+        const target = from.selected;
+        // The new chat's folders cover only what its draft mentions before the text joins it,
+        // not a sent draft's. `/new` in the new chat only drops its command line.
+        let folders = (yield* SubscriptionRef.get(state)).folders;
+        const moved = yield* chat
+          .moveToNewChat(from, (draft) => {
+            if (!target) return { text, mentions: [...mentions] };
+            folders = keepMentionedFolders(folders, draft.mentions);
+            return joinNewChatDraft(draft, folders, text, mentions, folder);
+          })
+          .pipe(Effect.catch((error) => Effect.succeed(error)));
+        // A stale `/new` fails silently on purpose: the first command already ran and moved the draft.
+        if (moved instanceof NewChatDraftError && moved.reason === 'stale') return false;
+        // A chat whose drafts couldn't move keeps its draft without the command.
+        if (moved !== true) yield* chat.setDraft(text, mentions);
+        if (moved instanceof NewChatDraftError) {
+          yield* report({ chat: target?.conversationId ?? '', draft: text, text: moved.message });
+          return false;
+        }
+        if (!moved || !target) return true;
+        yield* update((s) => ({ ...s, folders }));
+        if (text && folder)
+          yield* noteMentions(
+            mentions.map((mention) => mention.path),
+            folder,
+          );
+        // The move deselected the chat; closing its transcript writes nothing more.
+        yield* chat.closeDeselected(target);
+        return true;
+      });
+
     /** Follows the chat: what a sent draft or another chat leaves behind goes. */
     const observe = Effect.gen(function* () {
       const current = yield* chat.state;
@@ -344,41 +424,25 @@ const makeComposer = (chat: ComposerChat): Effect.Effect<ChatComposer, never, Sc
             return yield* sendInWorktree(place, createWorktree, selection);
           yield* startSend(settings);
         }),
-      startNewChat: (text, mentions, folder) =>
+      startNewChat: (from, text, mentions, folder) =>
+        FiberSet.run(commands, startNewChat(from, text, mentions, folder)).pipe(
+          Effect.flatMap(Fiber.join),
+        ),
+      turnIntoProject: (id, turn) =>
         Effect.gen(function* () {
-          const target = (yield* chat.state).selected;
-          if (!target) {
-            yield* chat.setDraft(text, mentions);
-            return true;
-          }
-          yield* chat.setDraft('');
-          yield* chat.closeView;
-          const current = yield* chat.state;
-          // The new chat's folders cover only what its draft mentions now, not a sent draft's.
-          if (!current.selected)
-            yield* update((s) => ({
-              ...s,
-              folders: keepMentionedFolders(s.folders, current.mentions),
-            }));
-          // A view that couldn't close keeps its draft without the command.
-          if (current.selected) yield* chat.setDraft(text, mentions);
-          else if (text) {
-            const { folders } = yield* SubscriptionRef.get(state);
-            const joined = joinNewChatDraft(current, folders, text, mentions, folder);
-            if ('problem' in joined) {
-              yield* FiberSet.run(sending, chat.select(target));
-              yield* chat.setDraft(text, mentions);
-              yield* report({ chat: target.conversationId, draft: text, text: joined.problem });
-              return false;
-            }
-            yield* chat.setDraft(joined.text, joined.mentions);
-            if ((yield* chat.state).draft === joined.text && folder)
-              yield* noteMentions(
-                mentions.map((mention) => mention.path),
-                folder,
-              );
-          }
-          return true;
+          const started = yield* SubscriptionRef.modify(state, (s) =>
+            s.turning.includes(id) ? [false, s] : [true, { ...s, turning: [...s.turning, id] }],
+          );
+          if (!started) return;
+          yield* dismiss({ chat: id });
+          yield* FiberSet.run(creations)(
+            turn.pipe(
+              Effect.catch((error) => report({ chat: id, text: describeTurnFailure(error) })),
+              Effect.ensuring(
+                update((s) => ({ ...s, turning: s.turning.filter((turning) => turning !== id) })),
+              ),
+            ),
+          );
         }),
     } satisfies ChatComposer;
   });

@@ -22,7 +22,8 @@ The renderer opens only roots chosen in the native picker, already known, listed
 ## Renderer
 
 - The renderer has one runtime (`src/renderer/main.tsx`) over `makeIpcLayer` (`DesktopIpc` and the `WorkspaceService` over it). The editor and application (`makeDocumentLayer` in `src/renderer/renderer-layer.ts`) are built in a document scope on that runtime.
-- Views read the editor and application through their atoms (`@effect/atom-react`) and run their actions on that runtime. Chat views read the open chat's atoms (`getChatAtoms`), shared through `src/renderer/chat/chat-context.ts`, and each part reads only the atoms it shows.
+- Main's native capabilities (pickers, Copy Path, Reveal, imports, chat folders and worktrees, a transcript's Copy, Open and image URLs) are `DesktopNative` (`src/renderer/ipc/desktop-native.ts`), whose methods return the IPC Effects. The root hands them to the shell and, as its `WorkbenchPlatform`, to the workbench.
+- Views read the editor and application through their atoms (`@effect/atom-react`) and run their actions through atom functions (`src/renderer/hooks/use-run.ts`), so unmounting a view interrupts what it started; pending and failed state comes from `AsyncResult`. Only the root (`main.tsx`) runs Effects itself. Chat views read the open chat's atoms (`getChatAtoms`), shared through `src/renderer/chat/chat-context.ts`, and each part reads only the atoms it shows.
 - The shell (`src/renderer/shell/`) composes the title bar, the rail and the project dock; `src/renderer/chat/chat-view.tsx` composes the chat list, header, pending commands, transcript and composer. Slash commands are in `src/renderer/chat/composer/commands.ts`.
 
 ## Run

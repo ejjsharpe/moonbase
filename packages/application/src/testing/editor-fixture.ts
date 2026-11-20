@@ -298,8 +298,10 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     SubscriptionRef.getUnsafe(session.state).closing
       ? closed()
       : new CancelledError({ operation: 'Editor action' });
-  const run = async <A, E>(effect: Effect.Effect<A, E, EditorServices>): Promise<A> =>
-    unwrap(await Effect.runPromiseExitWith(services)(effect), cancelled);
+  const run = async <A, E>(
+    effect: Effect.Effect<A, E, EditorServices>,
+    signal?: AbortSignal,
+  ): Promise<A> => unwrap(await Effect.runPromiseExitWith(services)(effect, { signal }), cancelled);
   const now = <A, E>(effect: Effect.Effect<A, E, EditorServices>): A =>
     unwrap(Effect.runSyncExitWith(services)(effect), cancelled);
   /** Calls `listener` after each change to `watched`, from now until unsubscribed. */
@@ -324,16 +326,14 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
       getSnapshot: (): S => SubscriptionRef.getUnsafe(query.state),
       subscribe: (listener: () => void) =>
         watchChanges([SubscriptionRef.changes(query.state)], listener),
-      /** Opens a result: `current` turns false once a newer query or open cancels it. */
-      open: (open: (current: () => boolean) => Promise<boolean>) =>
+      /** Opens a result through the query, which a newer query or open interrupts. */
+      open: (target: FileTarget, options?: OpenOptions) =>
         run(
           (
             query as unknown as {
               open: <E>(o: Effect.Effect<boolean, E>) => Effect.Effect<boolean>;
             }
-          ).open(
-            Effect.tryPromise({ try: (signal) => open(() => !signal.aborted), catch: (e) => e }),
-          ),
+          ).open(tabs.open(target, options)),
         ),
       message: (message: string) =>
         now((query as unknown as { message: (m: string) => Effect.Effect<void> }).message(message)),
@@ -379,7 +379,9 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
       now(session.update((s) => (s.closing ? s : { ...s, admissionsOpen: open }))),
     load: () => run(get(EditorLoader).load),
     openCheckout: (root: string) => run(checkouts.openCheckout(root)),
-    listWorktrees: (checkout: CheckoutTarget) => run(checkouts.listWorktrees(checkout)),
+    /** Lists a checkout's worktrees; aborting `signal` interrupts the listing. */
+    listWorktrees: (checkout: CheckoutTarget, signal?: AbortSignal) =>
+      run(checkouts.listWorktrees(checkout), signal),
     createWorktree: (input: CommandInput<'createWorktree'>) => run(checkouts.createWorktree(input)),
     initializeRepository: (checkout: CheckoutTarget) =>
       run(checkouts.initializeRepository(checkout)),
@@ -389,7 +391,9 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
       getSnapshot().buffers.find((buffer) => fileKey(buffer.target) === fileKey(target)),
     edit: (target: FileTarget, text: string) => now(tabs.edit(target, text)),
     keepOpen: (target: FileTarget) => now(tabs.keepOpen(target)),
-    open: (target: FileTarget, options?: OpenOptions) => run(tabs.open(target, options)),
+    /** Opens a file; aborting `signal` interrupts the open. */
+    open: (target: FileTarget, options?: OpenOptions, signal?: AbortSignal) =>
+      run(tabs.open(target, options), signal),
     navigate: (checkout: CheckoutTarget, direction: 1 | -1) =>
       run(tabs.navigate(checkout, direction)),
     reorder: (checkout: CheckoutTarget, from: string, to: number) =>
@@ -414,7 +418,9 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     resizeSidebar: (width: number) => now(tree.resizeSidebar(width)),
     setFollowActiveFile: (follow: boolean) => now(tree.setFollowActiveFile(follow)),
     list: (checkout: CheckoutTarget, path?: string) => run(tree.list(checkout, path)),
-    reveal: (target: FileTarget, options?: RevealOptions) => run(tree.reveal(target, options)),
+    /** Reveals a file; aborting `signal` interrupts the reveal. */
+    reveal: (target: FileTarget, options?: RevealOptions, signal?: AbortSignal) =>
+      run(tree.reveal(target, options), signal),
     refresh: (checkout: CheckoutTarget) => run(tree.refresh(checkout)),
     /** One lookup of file names in a checkout, with its recent files. */
     lookup: (checkout: CheckoutTarget, query: string) =>

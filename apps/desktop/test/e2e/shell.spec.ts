@@ -1597,6 +1597,14 @@ test('/ at the start of a message lists commands that switch model and effort, c
   await expect(model).toContainText('Demo coding model');
 });
 
+test('recent folders that could not be listed say so beside the projects', async ({ page }) => {
+  await page.goto('/?local&design&unlistedFolders');
+  await page.getByRole('button', { name: 'Choose working folder', exact: true }).click();
+  const folders = page.getByRole('dialog', { name: 'Working folder', exact: true });
+  await expect(folders.getByRole('group', { name: 'Projects' }).getByRole('button')).toHaveCount(1);
+  await expect(folders.getByRole('status')).toBeVisible();
+});
+
 test('a new chat sends without a project and lists as No project', async ({ page }) => {
   await page.goto('/?local&design');
   const folderChoice = page.getByRole('button', { name: 'Choose working folder', exact: true });
@@ -1622,7 +1630,8 @@ test('a new chat sends without a project and lists as No project', async ({ page
     .toBe(true);
   const saved = page.getByRole('complementary', { name: 'Saved chats', exact: true });
   await expect(saved.getByRole('button', { name: /^Plan a trip/ })).toContainText('No project');
-  // A failure is shown in the open chat, which stays as it was.
+  // A failure is shown in the open chat, which stays as it was. One that isn't Moonbase's own shows
+  // only the fixed text, not what it says.
   const turn = page.getByRole('button', { name: 'Turn into project', exact: true });
   await page.evaluate(() => {
     const chat = window.demo.chat,
@@ -1636,11 +1645,30 @@ test('a new chat sends without a project and lists as No project', async ({ page
     .getByRole('alert')
     .filter({ hasText: 'The chat could not become a project.' });
   await turn.click();
-  await expect(turnError).toHaveText('The chat could not become a project. The folder changed.');
+  await expect(turnError).toBeVisible();
+  await expect(turnError).not.toContainText('The folder changed.');
   await expect(saved.getByRole('button', { name: /^Plan a trip/ })).toContainText('No project');
-  // Its folder becomes a project where it is, and the chat lists under that project.
+  // Its folder becomes a project where it is, and the chat lists under that project. Settings
+  // opening and closing over the shell meanwhile leaves the turn running.
+  await page.evaluate(() => {
+    const chat = window.demo.chat,
+      original = chat.turnIntoProject,
+      held = Promise.withResolvers<void>();
+    (window as unknown as { releaseTurn: () => void }).releaseTurn = held.resolve;
+    chat.turnIntoProject = async (id) => {
+      chat.turnIntoProject = original;
+      await held.promise;
+      return original(id);
+    };
+  });
   await turn.click();
   await expect(turnError).toBeHidden();
+  await expect(turn).toBeDisabled();
+  await page.getByLabel('Message', { exact: true }).press('Meta+,');
+  await expect(page.getByRole('dialog', { name: 'Settings', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Settings', exact: true })).toHaveCount(0);
+  await page.evaluate(() => (window as unknown as { releaseTurn: () => void }).releaseTurn());
   await expect(
     page
       .getByRole('group', { name: 'Project tabs', exact: true })
