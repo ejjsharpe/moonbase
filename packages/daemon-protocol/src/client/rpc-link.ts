@@ -78,13 +78,14 @@ export type FollowOptions<U, E, A, P, C> = {
   next(previous: A | undefined, update: U): Effect.Effect<A, C>;
 };
 /**
- * The connection's typed client as one procedure's request sees it: only the method its tag names,
- * so the procedure a request sends is the one whose metadata (a mutation or not) the link reads.
+ * The one method of the connection's typed client a request's tag names. The link selects it by
+ * the tag and hands over only it, so the procedure a request sends is always the one whose
+ * metadata (a mutation or not) the link reads, whatever the tag's static type.
  */
-export type ProcedureClient<Rpcs extends Rpc.Any, K extends Rpc.Tag<Rpcs>> = Pick<
-  RpcConnectionClient<Rpcs>,
-  K
->;
+export type ProcedureMethod<
+  Rpcs extends Rpc.Any,
+  K extends Rpc.Tag<Rpcs>,
+> = RpcConnectionClient<Rpcs>[K];
 /**
  * A link to one socket of a host's daemon: `call` sends one request and `follow` follows a watch,
  * each through the connection's typed client.
@@ -94,7 +95,7 @@ export interface RpcLink<Rpcs extends Rpc.Any> {
   /** Sends one request; it fails with the errors its procedure declares, or the link's own. */
   call<K extends Rpc.Tag<Rpcs>, A, E, P, C = never>(
     operation: K,
-    send: (client: ProcedureClient<Rpcs, K>) => Effect.Effect<A, E>,
+    send: (method: ProcedureMethod<Rpcs, K>) => Effect.Effect<A, E>,
     options: CallOptions<A, E, P, C>,
   ): Effect.Effect<A, P | C | DaemonLinkError>;
   /**
@@ -106,7 +107,7 @@ export interface RpcLink<Rpcs extends Rpc.Any> {
    */
   follow<K extends Rpc.Tag<Rpcs>, U, E, A, P, C = never>(
     operation: K,
-    subscribe: (client: ProcedureClient<Rpcs, K>) => Stream.Stream<U, E>,
+    subscribe: (method: ProcedureMethod<Rpcs, K>) => Stream.Stream<U, E>,
     options: FollowOptions<U, E, A, P, C>,
   ): Stream.Stream<WatchUpdate<A>, P | C | DaemonLinkError>;
 }
@@ -134,16 +135,24 @@ const notServed = () => new IncompatibleHostError({ reason: 'not-served' });
  * interrupted, as a closing RPC server does. It is subscribed again, and never leaves the link.
  */
 class SubscriptionLost extends Data.TaggedError('SubscriptionLost') {}
+/** A watch's failure its own `present` or `next` gave: it leaves the link as it is. */
+class Refused<E> extends Data.TaggedError('Refused')<{ error: E }> {}
 /** Whether a failure came from the transport rather than the daemon. */
 const isTransport = (error: unknown) => {
   const tag = typeof error === 'object' && error !== null && (error as { _tag?: unknown })._tag;
   return tag === 'RpcClientError' || tag === 'SocketError' || tag === 'SubscriptionLost';
 };
-/** A reply or update whose check died on it: the daemon's reply was invalid. */
+/**
+ * A reply or update whose check died on it, or threw before it returned one: the daemon's reply
+ * was invalid.
+ */
 const invalidAfterDefect = <A, E>(
-  check: Effect.Effect<A, E>,
+  check: () => Effect.Effect<A, E>,
   reason: 'invalid-reply' | 'invalid-update',
-) => Effect.catchDefect(check, () => Effect.fail(new IncompatibleHostError({ reason })));
+) =>
+  Effect.catchDefect(Effect.suspend(check), () =>
+    Effect.fail(new IncompatibleHostError({ reason })),
+  );
 
 /** A connection generation, as the link keys its connections: equal by `connectionId`. */
 class Generation implements Equal.Equal {
@@ -304,7 +313,7 @@ export const makeRpcLink = <Rpcs extends Procedure>(
         const deadlineMs = options.deadlineMs ?? P.requestDeadlineMs;
         const late = lostReply(mutation, operation),
           unsent = unavailable('busy');
-        const sent = Effect.suspend(() => send(connection.client));
+        const sent = Effect.suspend(() => send(connection.client[operation]));
         const exit = yield* Effect.exit(
           options.places
             ? holdPlace(
@@ -351,16 +360,21 @@ export const makeRpcLink = <Rpcs extends Procedure>(
           );
         const output = exit.value;
         if (options.check)
-          yield* invalidAfterDefect(options.check(output, health), 'invalid-reply').pipe(
+          yield* invalidAfterDefect(() => options.check!(output, health), 'invalid-reply').pipe(
             // A mutation's reply refused: it may have applied.
             Effect.mapError((error) => (mutation ? lostReply(true, operation) : error)),
           );
         return output;
       });
 
+    /** What a watch fails with: its own refusal as it gave it, the link's own, or unavailable. */
+    const leaving = <R>(error: unknown): R | DaemonLinkError => {
+      if (error instanceof Refused) return error.error as R;
+      return isLinkError(error) ? error : unavailable();
+    };
     const follow = <K extends Rpc.Tag<Rpcs>, U, E, A, P, C>(
       operation: K,
-      subscribe: (client: ProcedureClient<Rpcs, K>) => Stream.Stream<U, E>,
+      subscribe: (method: ProcedureMethod<Rpcs, K>) => Stream.Stream<U, E>,
       options: FollowOptions<U, E, A, P, C>,
     ) =>
       Stream.callback<WatchUpdate<A>, P | C | DaemonLinkError>(
@@ -401,15 +415,18 @@ export const makeRpcLink = <Rpcs extends Procedure>(
                 return yield* Effect.fail(notServed());
               let previous: A | undefined;
               let reset = yield* Ref.get(delivered);
-              const updates = subscribe(connection.client).pipe(
+              const updates = subscribe(connection.client[operation]).pipe(
                 Stream.mapError((error) =>
                   isTransport(error) || !isOneOf(errors, error)
                     ? error
-                    : options.present(error as Parameters<typeof options.present>[0]),
+                    : new Refused({
+                        error: options.present(error as Parameters<typeof options.present>[0]),
+                      }),
                 ),
               );
               yield* Stream.runForEach(updates, (update) =>
-                invalidAfterDefect(options.next(previous, update), 'invalid-update').pipe(
+                invalidAfterDefect(() => options.next(previous, update), 'invalid-update').pipe(
+                  Effect.mapError((error) => new Refused({ error })),
                   Effect.flatMap((value) => {
                     previous = value;
                     const offered = Queue.offer(queue, { value, reset });
@@ -451,9 +468,7 @@ export const makeRpcLink = <Rpcs extends Procedure>(
               Effect.asVoid(
                 Queue.failCause(
                   queue,
-                  Cause.fail(
-                    ((error) => (isLinkError(error) ? error : unavailable()))(Cause.squash(cause)),
-                  ),
+                  Cause.fail(leaving<P | C | IncompatibleHostError>(Cause.squash(cause))),
                 ),
               ),
             ),

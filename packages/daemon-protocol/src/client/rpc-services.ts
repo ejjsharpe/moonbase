@@ -26,7 +26,7 @@ import {
   type DaemonRpc,
   type RemoteError,
 } from './daemon-rpc-link.ts';
-import type { ProcedureClient } from './rpc-link.ts';
+import type { ProcedureMethod } from './rpc-link.ts';
 
 /** What a daemon procedure's client fails with: the errors it declares, or the transport's. */
 type SentError = RemoteError | RpcClientError;
@@ -42,12 +42,12 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, DaemonRpcLink> = La
       <K extends ChatCommand, E extends SentError>(
         operation: K,
         send: (
-          client: ProcedureClient<DaemonRpc, K>,
+          method: ProcedureMethod<DaemonRpc, K>,
           payload: { host: ChatHostTarget; input: ChatInput<K> },
         ) => Effect.Effect<ChatOutput<K>, E>,
       ) =>
       (input: ChatInput<K>) =>
-        link.call(operation, (client) => send(client, { host, input }), {
+        link.call(operation, (method) => send(method, { host, input }), {
           // A chat a client makes chooses its own folder and model, which only a daemon offers.
           capability:
             operation === 'createChat' ? chatHostCapabilities.local : chatHostCapabilities.chat,
@@ -59,38 +59,28 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, DaemonRpcLink> = La
               : Effect.asVoid(checkChatOutput(operation, output, input)),
         });
     return {
-      getChatHost: call('getChatHost', (client, payload) => client.getChatHost(payload)),
-      listChats: call('listChats', (client, payload) => client.listChats(payload)),
-      createChat: call('createChat', (client, payload) => client.createChat(payload)),
-      getChat: call('getChat', (client, payload) => client.getChat(payload)),
-      getChatHistory: call('getChatHistory', (client, payload) => client.getChatHistory(payload)),
-      getChatTranscriptContent: call('getChatTranscriptContent', (client, payload) =>
-        client.getChatTranscriptContent(payload),
+      getChatHost: call('getChatHost', (method, payload) => method(payload)),
+      listChats: call('listChats', (method, payload) => method(payload)),
+      createChat: call('createChat', (method, payload) => method(payload)),
+      getChat: call('getChat', (method, payload) => method(payload)),
+      getChatHistory: call('getChatHistory', (method, payload) => method(payload)),
+      getChatTranscriptContent: call('getChatTranscriptContent', (method, payload) =>
+        method(payload),
       ),
-      findChatTranscript: call('findChatTranscript', (client, payload) =>
-        client.findChatTranscript(payload),
-      ),
-      getChatHistoryAround: call('getChatHistoryAround', (client, payload) =>
-        client.getChatHistoryAround(payload),
-      ),
-      sendChat: call('sendChat', (client, payload) => client.sendChat(payload)),
-      getChatSend: call('getChatSend', (client, payload) => client.getChatSend(payload)),
-      stopChat: call('stopChat', (client, payload) => client.stopChat(payload)),
-      settleChat: call('settleChat', (client, payload) => client.settleChat(payload)),
-      findChatFiles: call('findChatFiles', (client, payload) => client.findChatFiles(payload)),
+      findChatTranscript: call('findChatTranscript', (method, payload) => method(payload)),
+      getChatHistoryAround: call('getChatHistoryAround', (method, payload) => method(payload)),
+      sendChat: call('sendChat', (method, payload) => method(payload)),
+      getChatSend: call('getChatSend', (method, payload) => method(payload)),
+      stopChat: call('stopChat', (method, payload) => method(payload)),
+      settleChat: call('settleChat', (method, payload) => method(payload)),
+      findChatFiles: call('findChatFiles', (method, payload) => method(payload)),
       // While the connection is down the last snapshot is shown as reconnecting.
       watch: ({ target }) => {
         let last: ChatOutput<'getChat'> | undefined;
-        return followWatch(
-          link,
-          'watchChat',
-          'chat',
-          (client) => client.watchChat({ host, target }),
-          {
-            capability: chatHostCapabilities.chat,
-            check: (value) => Effect.asVoid(checkChatOutput('getChat', value, { target })),
-          },
-        ).pipe(
+        return followWatch(link, 'watchChat', 'chat', (method) => method({ host, target }), {
+          capability: chatHostCapabilities.chat,
+          check: (value) => Effect.asVoid(checkChatOutput('getChat', value, { target })),
+        }).pipe(
           Stream.filter((update) => !('reconnecting' in update) || last !== undefined),
           Stream.map((update) => {
             if ('reconnecting' in update)
@@ -101,25 +91,19 @@ export const RemoteChatLive: Layer.Layer<ChatService, never, DaemonRpcLink> = La
         );
       },
       watchChatList: ({ session }) =>
-        followWatch(
-          link,
-          'watchChatList',
-          'chatList',
-          (client) => client.watchChatList({ host, session }),
-          {
-            capability: chatHostCapabilities.chat,
-            // Every row, on the first page or past it, stays within the watched host and actor.
-            check: ({ list, changed }) =>
-              Effect.andThen(
-                checkChatOutput('listChats', list, { session }),
-                checkChatOutput(
-                  'listChats',
-                  { conversations: changed, nextCursor: null },
-                  { session },
-                ),
+        followWatch(link, 'watchChatList', 'chatList', (method) => method({ host, session }), {
+          capability: chatHostCapabilities.chat,
+          // Every row, on the first page or past it, stays within the watched host and actor.
+          check: ({ list, changed }) =>
+            Effect.andThen(
+              checkChatOutput('listChats', list, { session }),
+              checkChatOutput(
+                'listChats',
+                { conversations: changed, nextCursor: null },
+                { session },
               ),
-          },
-        ).pipe(
+            ),
+        }).pipe(
           Stream.filter((update) => !('reconnecting' in update)),
           Stream.map((update) => {
             const { value, reset } = update as Exclude<typeof update, { reconnecting: true }>;
@@ -139,12 +123,12 @@ const sendDaemonCommand = <K extends DaemonCommand, A extends DaemonOutput<K>, E
   operation: K,
   input: DaemonInput<K>,
   send: (
-    client: ProcedureClient<DaemonRpc, K>,
+    method: ProcedureMethod<DaemonRpc, K>,
     payload: { host: ChatHostTarget; input: DaemonInput<K> },
   ) => Effect.Effect<A, E>,
   check?: (output: A) => Effect.Effect<void, IncompatibleHostError>,
 ) =>
-  link.call(operation, (client) => send(client, { host: link.host, input }), {
+  link.call(operation, (method) => send(method, { host: link.host, input }), {
     capability: daemonCommandCapabilities[operation],
     present: (error) => presentRemoteError(error, operation),
     check: (output) => {
@@ -163,33 +147,23 @@ export const RemoteLocalHostLive: Layer.Layer<LocalHostService, never, DaemonRpc
       const link = yield* DaemonRpcLink;
       return {
         approveFolder: (input) =>
-          sendDaemonCommand(link, 'approveFolder', input, (client, payload) =>
-            client.approveFolder(payload),
-          ),
+          sendDaemonCommand(link, 'approveFolder', input, (method, payload) => method(payload)),
         listRecentFolders: (input) =>
-          sendDaemonCommand(link, 'listRecentFolders', input, (client, payload) =>
-            client.listRecentFolders(payload),
-          ),
+          sendDaemonCommand(link, 'listRecentFolders', input, (method, payload) => method(payload)),
         checkChatFolder: (input) =>
-          sendDaemonCommand(link, 'checkChatFolder', input, (client, payload) =>
-            client.checkChatFolder(payload),
-          ),
+          sendDaemonCommand(link, 'checkChatFolder', input, (method, payload) => method(payload)),
         checkApprovedFolder: (input) =>
-          sendDaemonCommand(link, 'checkApprovedFolder', input, (client, payload) =>
-            client.checkApprovedFolder(payload),
+          sendDaemonCommand(link, 'checkApprovedFolder', input, (method, payload) =>
+            method(payload),
           ),
         getActiveWork: (input) =>
-          sendDaemonCommand(link, 'getActiveWork', input, (client, payload) =>
-            client.getActiveWork(payload),
-          ),
+          sendDaemonCommand(link, 'getActiveWork', input, (method, payload) => method(payload)),
         markFolderAsProject: (input) =>
-          sendDaemonCommand(link, 'markFolderAsProject', input, (client, payload) =>
-            client.markFolderAsProject(payload),
+          sendDaemonCommand(link, 'markFolderAsProject', input, (method, payload) =>
+            method(payload),
           ),
         listHostFolders: (input) =>
-          sendDaemonCommand(link, 'listHostFolders', input, (client, payload) =>
-            client.listHostFolders(payload),
-          ),
+          sendDaemonCommand(link, 'listHostFolders', input, (method, payload) => method(payload)),
       } satisfies LocalHostHandlers;
     }),
   );
@@ -245,7 +219,7 @@ export const RemoteProviderSetupLive = (
           link,
           'openProviderUrl',
           { host, ownerId, flowId },
-          (client, payload) => client.openProviderUrl(payload),
+          (method, payload) => method(payload),
           checkUrl(flowId),
         );
       const openUrl = (url: string) =>
@@ -266,9 +240,7 @@ export const RemoteProviderSetupLive = (
         return {
           getProviders: () =>
             presentState(
-              sendDaemonCommand(link, 'getProviders', owned, (client, payload) =>
-                client.getProviders(payload),
-              ),
+              sendDaemonCommand(link, 'getProviders', owned, (method, payload) => method(payload)),
             ),
           startProviderLogin: ({ providerId }) =>
             presentState(
@@ -276,7 +248,7 @@ export const RemoteProviderSetupLive = (
                 link,
                 'startProviderLogin',
                 { ...mutation(), providerId },
-                (client, payload) => client.startProviderLogin(payload),
+                (method, payload) => method(payload),
               ),
             ),
           answerProviderPrompt: ({ flowId, promptId, answer }) =>
@@ -285,7 +257,7 @@ export const RemoteProviderSetupLive = (
                 link,
                 'answerProviderPrompt',
                 { ...mutation(), flowId, promptId, answer },
-                (client, payload) => client.answerProviderPrompt(payload),
+                (method, payload) => method(payload),
               ),
             ),
           cancelProviderLogin: ({ flowId }) =>
@@ -294,7 +266,7 @@ export const RemoteProviderSetupLive = (
                 link,
                 'cancelProviderLogin',
                 { ...mutation(), flowId },
-                (client, payload) => client.cancelProviderLogin(payload),
+                (method, payload) => method(payload),
               ),
             ),
           openProviderUrl: ({ flowId }) =>
@@ -307,7 +279,7 @@ export const RemoteProviderSetupLive = (
                 link,
                 'logoutProvider',
                 { ...mutation(), providerId },
-                (client, payload) => client.logoutProvider(payload),
+                (method, payload) => method(payload),
               ),
             ),
         };
@@ -315,15 +287,15 @@ export const RemoteProviderSetupLive = (
       return {
         forOwner,
         releaseOwner: (ownerId) =>
-          sendDaemonCommand(link, 'releaseProviderOwner', { host, ownerId }, (client, payload) =>
-            client.releaseProviderOwner(payload),
+          sendDaemonCommand(link, 'releaseProviderOwner', { host, ownerId }, (method, payload) =>
+            method(payload),
           ),
         watch: (ownerId) =>
           followWatch(
             link,
             'watchProviderSetup',
             'providerSetup',
-            (client) => client.watchProviderSetup({ host, ownerId }),
+            (method) => method({ host, ownerId }),
             { capability: daemonCommandCapabilities.getProviders },
           ).pipe(
             Stream.filter((update) => !('reconnecting' in update)),

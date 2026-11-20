@@ -24,7 +24,7 @@
 ## Errors (D14)
 
 - Each module defines `Schema.TaggedError` classes named for what happened, with literal fields (`problem`, `reason`, `refusal`) and a `message` built from them. Each exports its classes (`chatErrors`, `fileHostErrors`, …), its union type and a guard.
-- Each RPC procedure declares the union it can fail with (`chatErrorSchemaOf`, `daemonErrorSchemas`, `workspaceErrorSchemaOf`), always including `hostErrors`. Handlers pass service errors on, and the UI turns tags into text.
+- Each RPC procedure declares the union it can fail with as its `error`, always including `hostErrors`: read it on the procedure in its group (`ChatRpcs`, `LocalHostRpcs`, `ProviderSetupRpcs`, `WorkspaceRpcs`). Handlers pass service errors on, and the UI turns tags into text.
 - `UncertainError` (may have committed: check, never resend), `CancelledError` and `UnauthorizedError` in `errors` are the outcomes every caller treats the same.
 - A decision that depends on what a failure means rather than what failed asks `error-groups` (`isRefusal`, `isConflict`, `isUnavailable`, `isUncertain`, …). `isKnownError` says whether a failure is one contracts defines, so its message may be shown.
 - An error sent to or received from an untrusted host carries no cause, path or text the host wrote (D11). A field holding host text, such as Git output, is optional so a client can drop it.

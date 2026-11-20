@@ -45,9 +45,8 @@ test('one RPC connection runs every procedure and holds chat, chat-list and prov
         ),
       ),
     );
-    /** A procedure of the daemon's client by name: this test runs each of them. */
-    const procedure = <A>(client: unknown, operation: string) =>
-      (client as Record<string, (payload: object) => A>)[operation]!;
+    /** A procedure of the daemon's client, as the link selected it: this test runs each of them. */
+    const procedure = <A>(method: unknown) => method as (payload: object) => A;
     const subscribe = <K extends 'chat' | 'chatList' | 'providerSetup'>(
       operation: 'watchChat' | 'watchChatList' | 'watchProviderSetup',
       kind: K,
@@ -62,7 +61,7 @@ test('one RPC connection runs every procedure and holds chat, chat-list and prov
               operation,
               kind,
               // Its updates, as the daemon's client decoded them.
-              (client) => procedure<Stream.Stream<never>>(client, operation)(payload),
+              (method) => procedure<Stream.Stream<never>>(method)(payload),
               { capability: chatHostCapabilities.chat },
             ),
             (update) => Effect.sync(() => 'value' in update && receive(update.value as never)),
@@ -88,7 +87,7 @@ test('one RPC connection runs every procedure and holds chat, chat-list and prov
           Effect.flatMap(DaemonRpcLink, (link) =>
             link.call(
               operation,
-              (client) => procedure<Effect.Effect<unknown>>(client, operation)({ host, input }),
+              (method) => procedure<Effect.Effect<unknown>>(method)({ host, input }),
               {
                 capability: daemon
                   ? daemonCommandCapabilities[operation as DaemonCommand]

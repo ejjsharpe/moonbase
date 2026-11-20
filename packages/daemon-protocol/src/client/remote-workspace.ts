@@ -36,7 +36,7 @@ import {
 } from '@moonbase/contracts/workspace-host-errors';
 import { decodeHostInput, hostInputCheckout } from '@moonbase/contracts/workspace-host-schema';
 import { hostDeadlineMs, isHostStatusCall, WorkspaceRpcs } from '@moonbase/contracts/workspace-rpc';
-import { makeRpcLink, type ProcedureClient } from './rpc-link.ts';
+import { makeRpcLink, type ProcedureMethod } from './rpc-link.ts';
 
 /** The client's own text for a refusal a host recorded, by its kind. */
 const recordedRefusals = {
@@ -184,13 +184,13 @@ export const RemoteWorkspaceHostLive = (config: {
         <K extends HostCommand, E extends WorkspaceHostError | RpcClientError>(
           operation: K,
           request: (
-            client: ProcedureClient<WorkspaceRpc, K>,
+            method: ProcedureMethod<WorkspaceRpc, K>,
             payload: { host: ChatHostTarget; input: HostInput<K> },
           ) => Effect.Effect<HostOutput<K>, E>,
         ) =>
         (raw: HostInput<K>): Effect.Effect<HostOutput<K>, WorkspaceHostError> =>
           Effect.flatMap(prepare(operation, raw), ({ input, size }) =>
-            link.call(operation, (client) => request(client, { host, input }), {
+            link.call(operation, (method) => request(method, { host, input }), {
               capability: chatHostCapabilities.workspace,
               deadlineMs: hostDeadlineMs(operation),
               // Status calls have places of their own and are not charged for their input.
@@ -210,50 +210,36 @@ export const RemoteWorkspaceHostLive = (config: {
             }),
           );
       return {
-        openCheckout: send('openCheckout', (client, payload) => client.openCheckout(payload)),
-        verifyCheckout: send('verifyCheckout', (client, payload) => client.verifyCheckout(payload)),
-        readFile: send('readFile', (client, payload) => client.readFile(payload)),
-        saveFile: send('saveFile', (client, payload) => client.saveFile(payload)),
-        listDirectory: send('listDirectory', (client, payload) => client.listDirectory(payload)),
-        getIgnoredPaths: send('getIgnoredPaths', (client, payload) =>
-          client.getIgnoredPaths(payload),
-        ),
-        gitStatus: send('gitStatus', (client, payload) => client.gitStatus(payload)),
-        listWorktrees: send('listWorktrees', (client, payload) => client.listWorktrees(payload)),
-        createWorktree: send('createWorktree', (client, payload) => client.createWorktree(payload)),
-        initializeRepository: send('initializeRepository', (client, payload) =>
-          client.initializeRepository(payload),
-        ),
-        readComparison: send('readComparison', (client, payload) => client.readComparison(payload)),
-        lookupFiles: send('lookupFiles', (client, payload) => client.lookupFiles(payload)),
-        searchText: send('searchText', (client, payload) => client.searchText(payload)),
-        inspectEntries: send('inspectEntries', (client, payload) => client.inspectEntries(payload)),
-        mutate: send('mutate', (client, payload) => client.mutate(payload)),
-        operationStatus: send('operationStatus', (client, payload) =>
-          client.operationStatus(payload),
-        ),
-        acknowledgeOperation: send('acknowledgeOperation', (client, payload) =>
-          client.acknowledgeOperation(payload),
-        ),
-        saveStatus: send('saveStatus', (client, payload) => client.saveStatus(payload)),
-        acknowledgeSave: send('acknowledgeSave', (client, payload) =>
-          client.acknowledgeSave(payload),
-        ),
-        listOperations: send('listOperations', (client, payload) => client.listOperations(payload)),
-        createChatWorktree: send('createChatWorktree', (client, payload) =>
-          client.createChatWorktree(payload),
-        ),
-        turnChatIntoProject: send('turnChatIntoProject', (client, payload) =>
-          client.turnChatIntoProject(payload),
-        ),
-        captureImports: send('captureImports', (client, payload) => client.captureImports(payload)),
-        releaseImports: send('releaseImports', (client, payload) => client.releaseImports(payload)),
+        openCheckout: send('openCheckout', (method, payload) => method(payload)),
+        verifyCheckout: send('verifyCheckout', (method, payload) => method(payload)),
+        readFile: send('readFile', (method, payload) => method(payload)),
+        saveFile: send('saveFile', (method, payload) => method(payload)),
+        listDirectory: send('listDirectory', (method, payload) => method(payload)),
+        getIgnoredPaths: send('getIgnoredPaths', (method, payload) => method(payload)),
+        gitStatus: send('gitStatus', (method, payload) => method(payload)),
+        listWorktrees: send('listWorktrees', (method, payload) => method(payload)),
+        createWorktree: send('createWorktree', (method, payload) => method(payload)),
+        initializeRepository: send('initializeRepository', (method, payload) => method(payload)),
+        readComparison: send('readComparison', (method, payload) => method(payload)),
+        lookupFiles: send('lookupFiles', (method, payload) => method(payload)),
+        searchText: send('searchText', (method, payload) => method(payload)),
+        inspectEntries: send('inspectEntries', (method, payload) => method(payload)),
+        mutate: send('mutate', (method, payload) => method(payload)),
+        operationStatus: send('operationStatus', (method, payload) => method(payload)),
+        acknowledgeOperation: send('acknowledgeOperation', (method, payload) => method(payload)),
+        saveStatus: send('saveStatus', (method, payload) => method(payload)),
+        acknowledgeSave: send('acknowledgeSave', (method, payload) => method(payload)),
+        listOperations: send('listOperations', (method, payload) => method(payload)),
+        createChatWorktree: send('createChatWorktree', (method, payload) => method(payload)),
+        turnChatIntoProject: send('turnChatIntoProject', (method, payload) => method(payload)),
+        captureImports: send('captureImports', (method, payload) => method(payload)),
+        releaseImports: send('releaseImports', (method, payload) => method(payload)),
         watch: ({ checkout }) =>
           Stream.unwrap(
             Effect.as(
               ownHost('watchWorkspace', { checkout }),
               link
-                .follow('watchWorkspace', (client) => client.watchWorkspace({ host, checkout }), {
+                .follow('watchWorkspace', (method) => method({ host, checkout }), {
                   capability: chatHostCapabilities.workspace,
                   present: (error) => presentWorkspaceError(error, 'watchWorkspace'),
                   next: (_previous: WorkspaceWatchValue | undefined, value: WorkspaceWatchValue) =>

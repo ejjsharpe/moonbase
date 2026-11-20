@@ -18,7 +18,7 @@ import {
   type WatchValue,
 } from '@moonbase/contracts/watch';
 import { decodeWatchValue } from '@moonbase/contracts/watch-schema';
-import { makeRpcLink, type ProcedureClient, type RpcLink } from './rpc-link.ts';
+import { makeRpcLink, type ProcedureMethod, type RpcLink } from './rpc-link.ts';
 
 /** Every procedure a daemon may serve over RPC. */
 export const DaemonRpcs = ChatRpcs.merge(LocalHostRpcs, ProviderSetupRpcs);
@@ -91,7 +91,7 @@ export const followWatch = <
   link: RpcLink<DaemonRpc>,
   operation: T,
   kind: K,
-  subscribe: (client: ProcedureClient<DaemonRpc, T>) => Stream.Stream<Update<K>, E>,
+  subscribe: (method: ProcedureMethod<DaemonRpc, T>) => Stream.Stream<Update<K>, E>,
   options: { capability: string; check?: (value: WatchValue<K>) => Effect.Effect<void, C> },
 ) =>
   link.follow<

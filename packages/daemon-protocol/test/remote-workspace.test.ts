@@ -148,7 +148,7 @@ test('a 2 MiB file saves and reads back; a reply past its bound is refused, as U
   );
 });
 
-test('a call or watch for another host is refused before it is sent and by the daemon, and a reply naming another host’s checkout is refused', async (t) => {
+test('a call or watch for another host is refused before it is sent and by the daemon, and a reply naming another host’s checkout, or whose check throws, is refused, as Uncertain for a mutation', async (t) => {
   const files = controlledWorkspace();
   files.handlers.openCheckout = async () => foreign;
   files.handlers.createWorktree = async () => foreign;
@@ -166,7 +166,17 @@ test('a call or watch for another host is refused before it is sent and by the d
   // A client that skips those checks is refused by the daemon, and no handler runs.
   const linkRuntime = ManagedRuntime.make(EndpointConnectionLive(daemon.endpoint));
   t.after(() => linkRuntime.dispose());
-  const refused = await linkRuntime.runPromise(
+  const worktree = (requestId: string) =>
+    ({
+      installationId: identity.installationId,
+      requestId,
+      checkout: { ...checkout, vcs: 'git', branch: 'main', worktree: 'main' },
+      branch: 'b',
+      base: 'main',
+      location: '/work-b',
+    }) as never;
+  const refused: string[] = [];
+  const thrown = await linkRuntime.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const direct = yield* makeRpcLink({
@@ -188,23 +198,22 @@ test('a call or watch for another host is refused before it is sent and by the d
         yield* attempt(
           direct.call(
             'readFile',
-            (client) => client.readFile({ host, input: { checkout: foreign, path: 'a.txt' } }),
+            (method) => method({ host, input: { checkout: foreign, path: 'a.txt' } }),
             options,
           ),
         );
         yield* attempt(
           direct.call(
             'readFile',
-            (client) =>
-              client.readFile({ host: { ...host, hostId: 'other-host' }, input: fileTarget }),
+            (method) => method({ host: { ...host, hostId: 'other-host' }, input: fileTarget }),
             options,
           ),
         );
         yield* attempt(
           direct.call(
             'turnChatIntoProject',
-            (client) =>
-              client.turnChatIntoProject({
+            (method) =>
+              method({
                 host,
                 input: {
                   ...identity,
@@ -217,12 +226,22 @@ test('a call or watch for another host is refused before it is sent and by the d
         );
         yield* attempt(
           Stream.runDrain(
-            direct.follow(
-              'watchWorkspace',
-              (client) => client.watchWorkspace({ host, checkout: foreign }),
-              { ...options, next: (_, value) => Effect.succeed(value) },
-            ),
+            direct.follow('watchWorkspace', (method) => method({ host, checkout: foreign }), {
+              ...options,
+              next: (_, value) => Effect.succeed(value),
+            }),
           ),
+        );
+        refused.push(...tags.splice(0));
+        // A check that throws on a mutation's reply is as refused as one that fails: it may have
+        // applied, so it is Uncertain.
+        yield* attempt(
+          direct.call('createWorktree', (method) => method({ host, input: worktree('thrown') }), {
+            ...options,
+            check: () => {
+              throw new Error('check died');
+            },
+          }),
         );
         return tags;
       }),
@@ -234,24 +253,16 @@ test('a call or watch for another host is refused before it is sent and by the d
     'UnauthorizedError',
     'UnauthorizedError',
   ]);
-  assert.deepEqual(files.calls, []);
+  assert.deepEqual(thrown, ['UncertainError']);
+  assert.deepEqual(files.calls, ['createWorktree']);
+  files.calls.length = 0;
   // The daemon answers an open with a checkout of another host: refused, or Uncertain for a
   // mutation, which may have applied.
   assertError(await failure(run, workspace.openCheckout({ root: '/work' })), {
     _tag: 'IncompatibleHostError',
     reason: 'invalid-reply',
   });
-  const made = await failure(
-    run,
-    workspace.createWorktree({
-      installationId: identity.installationId,
-      requestId: 'w',
-      checkout: { ...checkout, vcs: 'git', branch: 'main', worktree: 'main' },
-      branch: 'b',
-      base: 'main',
-      location: '/work-b',
-    } as never),
-  );
+  const made = await failure(run, workspace.createWorktree(worktree('w')));
   assert.equal(made._tag, 'UncertainError');
   assert.deepEqual(files.calls, ['openCheckout', 'createWorktree']);
 });
@@ -507,11 +518,7 @@ test('requests past the input a connection may hold in flight wait unsent on the
           capability: chatHostCapabilities.workspace,
           present: <E>(error: E) => error,
         };
-        const read = direct.call(
-          'getIgnoredPaths',
-          (client) => client.getIgnoredPaths({ host, input }),
-          options,
-        );
+        const read = direct.call('getIgnoredPaths', (method) => method({ host, input }), options);
         for (let index = 0; index < 2; index++) yield* Effect.forkScoped(Effect.ignore(read));
         yield* Effect.promise(() =>
           until(
@@ -522,8 +529,7 @@ test('requests past the input a connection may hold in flight wait unsent on the
         return yield* Effect.flip(
           direct.call(
             'saveFile',
-            (client) =>
-              client.saveFile({ host, input: saveInput('x'.repeat(1024 * 1024), 'save-2') }),
+            (method) => method({ host, input: saveInput('x'.repeat(1024 * 1024), 'save-2') }),
             options,
           ),
         );
