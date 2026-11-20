@@ -28,6 +28,7 @@ import {
   EditorCheckouts,
   EditorDiscovery,
   EditorLoader,
+  EditorSession,
   editorLayer,
   fileKey,
   type EditorSnapshot,
@@ -95,6 +96,71 @@ describe('the discovery service on its own', () => {
     } finally {
       await editor.dispose();
       await runtime.dispose();
+    }
+  });
+
+  test('a listing admitted before its checkout is released never asks the workspace', async () => {
+    const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'one' } }]);
+    const runtime = ManagedRuntime.make(memory.layer);
+    const base = await runtime.runPromise(Effect.service(WorkspaceService));
+    let requests = 0;
+    const workspace = Layer.succeed(WorkspaceService, {
+      ...base,
+      listDirectory: (input) => Effect.suspend(() => ((requests += 1), base.listDirectory(input))),
+    });
+    const editor = ManagedRuntime.make(
+      Layer.provideMerge(editorLayer({ clientId: 'c' }), workspace),
+    );
+    try {
+      await editor.runPromise(
+        Effect.gen(function* () {
+          yield* (yield* EditorLoader).load;
+          const opened = yield* (yield* EditorCheckouts).openCheckout(checkout.root);
+          const discovery = yield* EditorDiscovery;
+          // Admitted, but released before it begins.
+          const listing = yield* Effect.forkChild(discovery.list(opened, ''), {
+            startImmediately: true,
+          });
+          const before = requests;
+          yield* discovery.release(opened);
+          const ended = yield* Effect.timeoutOption(Fiber.await(listing), '5 seconds');
+          assert(Option.isSome(ended), 'the listing settled');
+          assert(Exit.hasInterrupts(ended.value), 'the listing ended with its checkout');
+          assert.equal(requests, before, 'the workspace was never asked');
+          // The ended read left the cache: the folder lists again.
+          const again = yield* discovery.list(opened, '');
+          assert(again.entries.some((entry) => entry.path === 'a.ts'));
+        }),
+      );
+    } finally {
+      await editor.dispose();
+      await runtime.dispose();
+    }
+  });
+
+  test('closing the editor before a listing begins settles every caller joined to it', async () => {
+    const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'one' } }]);
+    const editor = ManagedRuntime.make(
+      Layer.provideMerge(editorLayer({ clientId: 'c' }), memory.layer),
+    );
+    try {
+      await editor.runPromise(
+        Effect.gen(function* () {
+          yield* (yield* EditorLoader).load;
+          const opened = yield* (yield* EditorCheckouts).openCheckout(checkout.root);
+          const discovery = yield* EditorDiscovery;
+          const list = Effect.forkChild(discovery.list(opened, '', false), {
+            startImmediately: true,
+          });
+          const callers = [yield* list, yield* list];
+          yield* (yield* EditorSession).close;
+          const settled = yield* Effect.timeoutOption(Fiber.awaitAll(callers), '5 seconds');
+          assert(Option.isSome(settled), 'every caller settled');
+          for (const ended of settled.value) assert(Exit.hasInterrupts(ended));
+        }),
+      );
+    } finally {
+      await editor.dispose();
     }
   });
 

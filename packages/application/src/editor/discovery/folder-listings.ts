@@ -3,9 +3,9 @@ import {
   Deferred,
   Effect,
   Equal,
+  Exit,
   Fiber,
   FiberMap,
-  FiberSet,
   Hash,
   Ref,
   SubscriptionRef,
@@ -45,10 +45,12 @@ type ReadBegun = {
 
 /**
  * One listing read of a folder, which later callers join until it is listed or a change. The cache
- * holds it before it begins: only the read itself shows its listing or drops it from the cache.
+ * holds it before it begins: only the read itself shows its listing or drops it from the cache,
+ * unless the checkout's scope closed before it began, which ends it unbegun.
  */
 type ListingRead = {
-  readonly begun: Deferred.Deferred<ReadBegun>;
+  /** Begins the read in the checkout's scope it was admitted in, so releasing that ends it. */
+  readonly begun: Fiber.Fiber<ReadBegun>;
   /** Whether a caller reports the read's failures: one that joins a quiet read makes it loud. */
   readonly loud: Ref.Ref<boolean>;
   /** Reports the listing's failure, once however many callers report it. */
@@ -99,16 +101,18 @@ export const makeFolderListings = (options: {
         yield* classification.classify(folder, scope, listing, shown, loud);
       }).pipe(Effect.ignore);
 
-    /** Reads beginning, each once the cache holds it. */
-    const beginning = yield* FiberSet.make<void>();
-
     /**
      * Begins a cached read. The read claims the folder's listing before anything can suspend it,
      * so a read admitted after it (a change dropped it from the cache) claims it after, and shows.
      * Cancelling the last classification may read the folder again: that read finds this one cached
      * and joins it, as its request is not yet asked.
      */
-    const beginRead = (folder: FolderKey, read: ListingRead) =>
+    const beginRead = (
+      folder: FolderKey,
+      scope: Scope.Scope,
+      loud: Ref.Ref<boolean>,
+      isRead: (cached: ListingRead) => boolean,
+    ) =>
       Effect.gen(function* () {
         const { checkout, path, key } = folder;
         const started = yield* Deferred.make<{
@@ -119,14 +123,13 @@ export const makeFolderListings = (options: {
           showing,
           key,
           Effect.flatMap(Deferred.await(started), ({ scope, listed }) =>
-            showListing(folder, scope, listed, read.loud),
+            showListing(folder, scope, listed, loud),
           ).pipe(
             // The read's end drops it, never a later read, from the cache: callers read again.
-            Effect.ensuring(Cache.invalidateWhen(reads, folder, (cached) => cached === read)),
+            Effect.ensuring(Cache.invalidateWhen(reads, folder, isRead)),
           ),
           { startImmediately: false },
         );
-        const scope = yield* checkoutScope(checkout);
         yield* classification.cancel(key);
         const listed = yield* Effect.forkIn(
           workspace.listDirectory({
@@ -138,25 +141,30 @@ export const makeFolderListings = (options: {
           { startImmediately: false },
         );
         yield* Deferred.succeed(started, { scope, listed });
-        yield* Deferred.succeed(read.begun, { listed, shown });
+        return { listed, shown } satisfies ReadBegun;
       }).pipe(Effect.uninterruptible);
 
     const reads: Cache.Cache<FolderKey, ListingRead> = yield* Cache.make({
       capacity: Number.POSITIVE_INFINITY,
       // Only allocates the read: it begins once cached, so nothing it starts can replace the entry.
+      // The checkout's scope is taken here, as the read is admitted: releasing the checkout after
+      // ends the read even before it begins, rather than it beginning in the next scope.
       lookup: (folder: FolderKey) =>
         Effect.gen(function* () {
-          const begun = yield* Deferred.make<ReadBegun>();
+          const scope = yield* checkoutScope(folder.checkout);
           const loud = yield* Ref.make(folder.loud);
+          const begun = yield* Effect.forkIn(
+            beginRead(folder, scope, loud, (cached) => cached.loud === loud),
+            scope,
+            { startImmediately: false },
+          );
           const reportFailure = yield* Effect.cached(
-            Deferred.await(begun).pipe(
+            Fiber.join(begun).pipe(
               Effect.flatMap(({ listed }) => Effect.catch(Fiber.join(listed), report)),
               Effect.ignoreCause,
             ),
           );
-          const read = { begun, loud, reportFailure } satisfies ListingRead;
-          yield* FiberSet.run(beginning, beginRead(folder, read), { startImmediately: false });
-          return read;
+          return { begun, loud, reportFailure } satisfies ListingRead;
         }),
     });
 
@@ -164,9 +172,16 @@ export const makeFolderListings = (options: {
       /** Lists a folder and shows it; see `EditorDiscoveryShape['list']`. */
       list: (checkout: CheckoutTarget, path: string, loud: boolean) =>
         Effect.gen(function* () {
-          const read = yield* Cache.get(reads, new FolderKey(checkout, path, loud));
+          const folder = new FolderKey(checkout, path, loud);
+          const read = yield* Cache.get(reads, folder);
           if (loud) yield* Ref.set(read.loud, true);
-          const begun = yield* Deferred.await(read.begun);
+          const started = yield* Fiber.await(read.begun);
+          if (Exit.isFailure(started)) {
+            // Its checkout's scope closed before it began, so nothing else drops it from the cache.
+            yield* Cache.invalidateWhen(reads, folder, (cached) => cached === read);
+            return yield* Effect.failCause(started.cause);
+          }
+          const begun = started.value;
           const listed = yield* Fiber.await(begun.listed);
           yield* Fiber.await(begun.shown);
           if (loud) yield* read.reportFailure;
