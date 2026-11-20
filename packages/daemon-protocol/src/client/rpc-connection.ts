@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Scope, Stream, SubscriptionRef } from 'effect';
+import { Clock, Effect, Layer, Option, Ref, Scope, Stream, SubscriptionRef } from 'effect';
 import { RpcClient, RpcSerialization, type Rpc, type RpcGroup } from 'effect/rpc';
 import * as Socket from 'effect/socket/Socket';
 import { isUnavailable } from '@moonbase/contracts/error-groups';
@@ -105,9 +105,13 @@ const openFailure = (
       error: reason.cause,
       retryable: isUnavailable(reason.cause) && !isRefusedUpgrade(reason.cause),
     };
-  if (reason._tag === 'SocketOpenError' && reason.kind === 'Timeout')
+  // It didn't open in time, or went silent past the ping timeout while it opened.
+  if (
+    (reason._tag === 'SocketOpenError' && reason.kind === 'Timeout') ||
+    reason._tag === 'SocketReadError'
+  )
     return { error: unavailable('unreachable'), retryable: true };
-  // The daemon closed the socket before it opened: it refused the upgrade.
+  // The daemon closed the socket before it opened, or failed its upgrade: it refused it.
   return { error: unavailable('refused'), retryable: false };
 };
 const isRefusedUpgrade = (error: DaemonLinkError) =>
@@ -138,7 +142,15 @@ export const openRpcConnection = <Rpcs extends Rpc.Any>(
       ),
     );
     const isOpen = Effect.map(SubscriptionRef.get(state), (now) => now._tag === 'open');
+    /** When the current attempt's socket opened; none until it does. */
+    const openedAt = yield* Ref.make<number | undefined>(undefined);
+    /**
+     * The WebSocket of the attempt being opened, and the open one, which a write goes out on:
+     * open from `onConnect` until the reader's scope closes, none in between.
+     */
+    let opening: Socket.WebSocketLike | undefined, open: Socket.WebSocketLike | undefined;
     const acquire = Effect.gen(function* () {
+      yield* Ref.set(openedAt, undefined);
       yield* SubscriptionRef.set(state, { _tag: 'connecting' });
       const { health, upgradeNonce } = yield* requestUpgradeNonce(endpoint);
       if (!health.capabilities.includes(chatHostCapabilities.rpc))
@@ -158,7 +170,8 @@ export const openRpcConnection = <Rpcs extends Rpc.Any>(
         ),
         (ws) => Effect.sync(() => ws.close()),
       );
-      return boundInbound(ws, config.inboundBytes);
+      opening = boundInbound(ws, config.inboundBytes);
+      return opening;
     }).pipe(
       Effect.mapError(
         (error) =>
@@ -171,10 +184,33 @@ export const openRpcConnection = <Rpcs extends Rpc.Any>(
       ),
     );
     /**
-     * The socket, open from when the RPC client starts reading it (`onConnect`, once it has
-     * cleared the last socket's failure) until its scope closes, marked lost before the WebSocket
-     * is detached: a write that finds it open is sent at once on it, and one that doesn't fails
-     * rather than waiting for the next socket.
+     * Writes to the socket open now, in one synchronous step, or fails if none is. The socket
+     * `fromWebSocket` makes holds a write made while it is disconnected and sends it on the next
+     * socket, after the RPC client may have failed the request it carries as lost; this one never
+     * holds a write, so none reaches a socket that opened after it was made.
+     */
+    const write = (chunks: readonly (Uint8Array | string | Socket.CloseEvent)[]) =>
+      Effect.suspend(() => {
+        const ws = open;
+        if (ws === undefined)
+          return Effect.fail(
+            new Socket.SocketError({ reason: new Socket.SocketWriteError({ cause: 'closed' }) }),
+          );
+        try {
+          for (const chunk of chunks)
+            if (Socket.isCloseEvent(chunk)) ws.close(chunk.code, chunk.reason);
+            else ws.send(chunk as string | Uint8Array<ArrayBuffer>);
+          return Effect.void;
+        } catch (cause) {
+          return Effect.fail(
+            new Socket.SocketError({ reason: new Socket.SocketWriteError({ cause }) }),
+          );
+        }
+      });
+    /**
+     * The socket, read through `fromWebSocket` and written directly: open from when the RPC client
+     * starts reading it (`onConnect`, once it has cleared the last socket's failure) until its
+     * reader's scope closes, which marks it lost before the WebSocket is detached.
      */
     const socket = Effect.map(
       Socket.fromWebSocket(acquire, { openTimeout: rpcLimits.connectMs }),
@@ -183,33 +219,16 @@ export const openRpcConnection = <Rpcs extends Rpc.Any>(
           reader: Effect.gen(function* () {
             const reader = yield* inner.reader;
             yield* Effect.addFinalizer(() =>
-              SubscriptionRef.set(state, {
-                _tag: 'lost',
-                error: unavailable('closed'),
-              }),
+              Effect.andThen(
+                Effect.sync(() => {
+                  open = undefined;
+                }),
+                SubscriptionRef.set(state, { _tag: 'lost', error: unavailable('closed') }),
+              ),
             );
             return reader;
           }),
-          writer: Effect.map(inner.writer, (writer) => {
-            const whenOpen =
-              <A>(write: (chunk: A) => Effect.Effect<void, Socket.SocketError>) =>
-              (chunk: A) =>
-                Effect.flatMap(isOpen, (open) =>
-                  open
-                    ? write(chunk)
-                    : Effect.fail(
-                        new Socket.SocketError({
-                          reason: new Socket.SocketWriteError({
-                            cause: 'closed',
-                          }),
-                        }),
-                      ),
-                );
-            return {
-              write: whenOpen(writer.write),
-              writeAll: whenOpen(writer.writeAll),
-            };
-          }),
+          writer: Effect.succeed({ write: (chunk) => write([chunk]), writeAll: write }),
         }),
     );
     /**
@@ -221,12 +240,17 @@ export const openRpcConnection = <Rpcs extends Rpc.Any>(
       Effect.uninterruptible(
         Effect.gen(function* () {
           const now = yield* SubscriptionRef.get(state);
+          // A dropped socket was marked lost as it closed; marking it again would settle a call
+          // that started waiting since.
+          if (now._tag === 'lost' && !closed) return;
           const failure = now._tag === 'lost' ? now.error : openFailure(error, isLinkError).error;
           yield* SubscriptionRef.set(state, { _tag: closed ? 'closed' : 'lost', error: failure });
           if (closed) yield* onClosed;
         }),
       );
     const retryPolicy = reconnectSchedule<Socket.SocketError>({
+      // An attempt renews the budget only once its socket had been open `renewMs`.
+      upSince: Ref.get(openedAt),
       // A dropped socket is opened again; an attempt that failed, only if it may yet open.
       isRetryable: (error) =>
         SubscriptionRef.getUnsafe(state)._tag === 'lost' ||
@@ -242,9 +266,13 @@ export const openRpcConnection = <Rpcs extends Rpc.Any>(
         Layer.effect(Socket.Socket, socket),
         RpcSerialization.layerJson,
         Layer.succeed(RpcClient.ConnectionHooks, {
-          onConnect: SubscriptionRef.update(state, (now): ConnectionState =>
-            now._tag === 'connecting' && now.health ? { _tag: 'open', health: now.health } : now,
-          ),
+          onConnect: Effect.gen(function* () {
+            open = opening;
+            yield* Ref.set(openedAt, yield* Clock.currentTimeMillis);
+            yield* SubscriptionRef.update(state, (now): ConnectionState =>
+              now._tag === 'connecting' && now.health ? { _tag: 'open', health: now.health } : now,
+            );
+          }),
           // A dropped socket is marked lost as it closes, above.
           onDisconnect: Effect.void,
         }),

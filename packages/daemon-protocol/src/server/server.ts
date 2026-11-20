@@ -27,6 +27,7 @@ import {
 import { isAccessRefusal } from '@moonbase/contracts/error-groups';
 import { UnauthorizedError } from '@moonbase/contracts/errors';
 import { serveBun, type BunServer, type BunWebSocket } from './bun-server.ts';
+import { CloseRpcFirst } from './close-rpc-first.ts';
 import { serveRpc, serveWorkspaceRpc } from './rpc-server.ts';
 import type { RpcConnections, RpcSocketData } from './rpc-connections.ts';
 import { createUpgradeNonces, isUpgradeProof, readUpgradeProtocols } from '../upgrade-proof.ts';
@@ -65,11 +66,6 @@ export type ChatServerOptions = {
   closeMs?: number;
   /** Runs once a close goes on without the work it waited for. */
   onCloseTimeout?: Effect.Effect<void>;
-  /**
-   * Stops Bun only once the RPC servers have closed, so they send each running watch and request
-   * an interrupted exit. Tests use it to prove a client takes those as a lost connection (#404).
-   */
-  closeRpcFirst?: boolean;
 };
 /** A local-mode daemon's features beyond chat: local-mode chat and control, providers, folders. */
 export const localDaemonCapabilities: readonly ChatHostCapability[] = [
@@ -118,6 +114,7 @@ export const serveChat = (
 ) =>
   Effect.gen(function* () {
     const { host: expected, token } = config;
+    const closeRpcFirst = yield* CloseRpcFirst;
     const health: ChatHostHealth = {
       ...expected,
       protocol: chatProtocolVersion,
@@ -350,7 +347,7 @@ export const serveChat = (
       // Releasing the listener starts three closes at once, none waiting on another to begin:
       // Bun's stop, first, so it cuts the connections before the RPC servers close them (otherwise
       // they send each running watch and request an interrupted exit, which the client takes as a
-      // lost connection, #404; `closeRpcFirst` makes them, for tests);
+      // lost connection, #404; `CloseRpcFirst` makes them, for tests);
       // `listening`, which refuses later requests and interrupts the answers still running; and
       // the RPC servers', which waits for the mutations they run. The release then waits
       // for the answers' cleanup (each probe's admission) and the mutations, so neither outlives
@@ -377,7 +374,7 @@ export const serveChat = (
             );
             return [stopping, closing] as const;
           });
-          const [stopping, closing] = yield* options.closeRpcFirst ? closeFirst : stopFirst;
+          const [stopping, closing] = yield* closeRpcFirst ? closeFirst : stopFirst;
           yield* Effect.all(
             [
               Fiber.await(stopping),

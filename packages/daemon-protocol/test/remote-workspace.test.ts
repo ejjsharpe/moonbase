@@ -253,7 +253,7 @@ test('a call or watch for another host is refused before it is sent and by the d
   assert.deepEqual(files.calls, ['openCheckout', 'createWorktree']);
 });
 
-test('an upgrade the daemon refuses, or a key it does not prove, fails calls and watches and is not retried unasked; the next call proves a fresh socket', async (t) => {
+test('an upgrade the daemon refuses, or a host that does not prove the key, is not the one expected or does not serve the socket, fails calls and watches and is not retried unasked; the next call proves a fresh socket', async (t) => {
   const files = controlledWorkspace();
   files.handlers.readFile = async () => ({ text: 'ok', version: 'v1' });
   const daemon = await serveWorkspace(t, files.service);
@@ -274,22 +274,27 @@ test('an upgrade the daemon refuses, or a key it does not prove, fails calls and
   assert.equal((await run(workspace.readFile(fileTarget))).text, 'ok');
   assert.equal(sockets.opened.length, 3);
   assert.equal(new Set(sockets.opened.map(({ protocols }) => protocols[1])).size, 3);
-  // A host that doesn't prove the key fails its health: no socket opens, and none is retried.
-  const impostor = await remoteWorkspace(
-    t,
-    { endpoint: { ...daemon.endpoint, token: nonce() } },
-    true,
-  );
-  for (const error of [
-    await failure(impostor.run, impostor.workspace.readFile(fileTarget)),
-    await failure(
-      impostor.run,
-      Stream.runDrain(impostor.workspace.watch({ checkout, paths: [''] })),
-    ),
-  ])
-    assert.equal(getErrorGroup(error), 'access');
-  await impostor.advance(60_000);
-  assert.equal(sockets.opened.length, 3);
+  // A host that doesn't prove the key or isn't the one expected fails its health check, and one
+  // that doesn't serve files is refused after it: no socket opens, and none is retried. A watch waits through reconnects, so its
+  // failing shows the connection was given up on.
+  const bare = await serveWorkspace(t);
+  for (const [endpoint, group] of [
+    [{ ...daemon.endpoint, token: nonce() }, 'access'],
+    [{ ...daemon.endpoint, expected: { ...host, storeId: 'another-store' } }, 'incompatible'],
+    [bare.endpoint, 'incompatible'],
+  ] as const) {
+    const refused = await remoteWorkspace(t, { endpoint }, true);
+    for (const error of [
+      await failure(refused.run, refused.workspace.readFile(fileTarget)),
+      await failure(
+        refused.run,
+        Stream.runDrain(refused.workspace.watch({ checkout, paths: [''] })),
+      ),
+    ])
+      assert.equal(getErrorGroup(error), group);
+    await refused.advance(60_000);
+    assert.equal(sockets.opened.length, 3);
+  }
   assert.deepEqual(files.calls, ['readFile']);
 });
 
@@ -522,7 +527,7 @@ test('requests past the input a connection may hold in flight wait unsent on the
   );
   assertError(refused, { _tag: 'HostUnavailableError', reason: 'busy' });
   // The connection closes while the save waits for its bytes: it was never sent, so it is busy,
-  // not Uncertain, and the reads it carried lost their replies.
+  // not Uncertain, and the reads it carried lost their replies to the generation change.
   client.replace();
   assert.deepEqual(await run(workspace.saveStatus({ ...identity, requestId: 'save-1' })), {
     kind: 'not-started',
@@ -531,7 +536,7 @@ test('requests past the input a connection may hold in flight wait unsent on the
   for (const read of reads)
     assertError(await read, {
       _tag: 'HostUnavailableError',
-      reason: 'reply-lost',
+      reason: 'generation-changed',
     });
   assert(!files.calls.includes('saveFile'));
   // Nothing it held is kept: requests filling the whole bound again go through.

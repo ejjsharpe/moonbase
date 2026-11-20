@@ -187,10 +187,8 @@ const holdPlace = <A, E>(
           }),
         ),
       ).pipe(Effect.onInterrupt(() => abandon));
-      // A send stopped by its connection closing lost its reply.
-      return yield* Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
-        ? Effect.fail(late)
-        : exit;
+      // A send stopped by its connection closing ends interrupted, as `call` reads it.
+      return yield* exit;
     }),
   );
 
@@ -293,15 +291,21 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
         );
         if (Exit.isFailure(exit)) {
           // The caller's own interruption never reaches here: an interrupted reply is the
-          // daemon's, as a closing RPC server sends each request it runs (#404). Its reply is lost.
-          if (Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.fail(late);
-          const error = Cause.squash(exit.cause);
+          // daemon's, as a closing RPC server sends each request it runs (#404), or its
+          // connection's as it closes.
+          const interrupted = Cause.hasInterruptsOnly(exit.cause);
+          const error = interrupted ? undefined : Cause.squash(exit.cause);
           if (error === late) return yield* Effect.fail(late);
           // Refused before it was sent, whatever became of the connection since.
           if (error === unsent) return yield* Effect.fail(unsent);
-          // Only an error the daemon's procedures declare is its answer; anything else lost it.
-          if (isTransport(error) || !isOneOf(config.errors, error))
-            return yield* Effect.fail(lostReply(options.mutation, operation));
+          // Only an error the daemon's procedures declare is its answer; anything else lost it,
+          // to a generation change if there was one.
+          if (interrupted || isTransport(error) || !isOneOf(config.errors, error))
+            return yield* Effect.fail(
+              (yield* isCurrent(endpoint))
+                ? lostReply(options.mutation, operation)
+                : generationChanged(options.mutation, operation),
+            );
         }
         // A reply belongs to the generation it was sent on; one that changed since is stale.
         if (!(yield* isCurrent(endpoint)))
@@ -333,6 +337,7 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
         (queue) =>
           Effect.gen(function* () {
             const first = yield* lookUpEndpoint;
+            const clock = yield* Clock.Clock;
             // A connection publication ends the watch once its generation is gone.
             yield* Effect.forkScoped(
               connections.watch().pipe(
@@ -351,7 +356,11 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
             // Once a value has been delivered, a lost subscription reads as reconnecting and the
             // first value after it replaces whatever was missed.
             const delivered = yield* Ref.make(false);
+            // When this subscription delivered its first value: one that had been delivering for
+            // `renewMs` renews the reconnect budget.
+            const firstAt = yield* Ref.make<number | undefined>(undefined);
             const subscribe = Effect.gen(function* () {
+              yield* Ref.set(firstAt, undefined);
               const endpoint = yield* lookUpEndpoint;
               if (endpoint.connectionId !== first.connectionId)
                 return yield* Effect.fail(generationChanged(false, operation));
@@ -380,7 +389,12 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
                     previous = value;
                     const offered = Queue.offer(queue, { value, reset });
                     reset = false;
-                    return Effect.andThen(offered, Ref.set(delivered, true));
+                    return offered.pipe(
+                      Effect.andThen(Ref.set(delivered, true)),
+                      Effect.andThen(
+                        Ref.update(firstAt, (at) => at ?? clock.currentTimeMillisUnsafe()),
+                      ),
+                    );
                   }),
                 ),
               );
@@ -399,6 +413,7 @@ export const makeRpcLink = <Rpcs extends Rpc.Any>(config: RpcLinkConfiguration<R
             yield* subscribe.pipe(
               Effect.retry(
                 reconnectSchedule({
+                  upSince: Ref.get(firstAt),
                   isRetryable: isTransport,
                   onRetry: () =>
                     Effect.flatMap(Ref.get(delivered), (gap) =>
