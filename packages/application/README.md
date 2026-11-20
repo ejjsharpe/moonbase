@@ -31,7 +31,7 @@
 - Chat (`chatLayer(dependencies)` over `ChatPort`, `ConnectionPort` and `ProviderSetupPort` in `chat-ports.ts`): `actions`, `drafts`, `link` (one connected host's lifetime), `connection`, `chat-list`, `selection`, `sends`, `transcript`, `file-search`, `provider-setup`, `composer` and `native-actions` (a transcript's Copy and Open).
 - Runtime: `MoonbaseApplication.layer(options)` builds one `ChatHost` (one chat target open at a time, each in its own scope) over an optional `editorLayer` supplied beneath it, so the chat is released before the editor. `start` loads the editor and opens the chat; `canUnload` and `prepareQuit` keep every draft first; `release` ends the chat before the root disposes the runtime.
 
-A host's `ChatService` is a `ChatPort` as it is. The shared watch backoff is `watchRetrySchedule` in `src/watch-retry.ts`; the editor's checkout watches, the chat list, the open chat and provider setup all retry on it.
+A host's `ChatService` is a `ChatPort` as it is. The shared watch backoff is `watchRetrySchedule` in `src/watch-retry.ts`; the editor's checkout watches, the chat list, the open chat and provider setup all retry on it. `makeRunAgain` in `src/run-again.ts` runs keyed work one at a time, joined or run once more after: the chat list's reloads and the editor's checkout refreshes.
 
 ## Rules worth knowing
 
