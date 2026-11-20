@@ -516,9 +516,7 @@ export class Journal {
       return Effect.fail(new WorkspaceConflictError({ conflict: 'request-payload' }));
     if (record.result) return Effect.succeed(record.result);
     if (record.error)
-      return Effect.fail(
-        new RecordedRefusalError({ refusal: record.error.refusal, text: record.error.message }),
-      );
+      return Effect.fail(new RecordedRefusalError({ refusal: record.error.refusal }));
     return Effect.fail(new InterruptedRequestError({ operation }));
   }
 

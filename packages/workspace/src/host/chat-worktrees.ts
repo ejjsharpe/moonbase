@@ -71,7 +71,7 @@ export const makeChatWorktree = ({ root, branch }: { root: string; branch: strin
         // Git, and every numbered name too: use `chat-topic`, which has no folders to clash with.
         if (clash === 'folder') return yield* new FolderClash();
         // Branches inside the name (`chat/topic` for `chat`) block it as a taken one would.
-        if (clash === 'inside') return yield* new BranchTakenError({ branch: name, inside: true });
+        if (clash === 'inside') return yield* new BranchTakenError({ inside: true });
         return (yield* worktrees.createWorktree({
           checkout: target,
           base: 'HEAD',

@@ -4,7 +4,7 @@ import type { ErrorGroup } from './error-groups.ts';
 // What desktop IPC fails with (epic #273 D14): main's refusals of a window's requests, and the
 // renderer's own when it can't send a request or read a reply. They live here, beside the errors
 // main passes on, because the application reads them too. Each reason has what it means for the
-// request (`error-groups`) and its message, which is Moonbase's own.
+// request (its `group`) and its message, which is Moonbase's own.
 
 const inputProblems = {
   'too-large': ['refusal', 'Command input is too large.'],
@@ -20,6 +20,9 @@ const inputProblems = {
 export class IpcInputError extends Schema.TaggedError<IpcInputError>()('IpcInputError', {
   problem: Schema.Literals(Object.keys(inputProblems) as [keyof typeof inputProblems]),
 }) {
+  get group(): ErrorGroup {
+    return inputProblems[this.problem][0];
+  }
   override get message(): string {
     return inputProblems[this.problem][1];
   }
@@ -39,6 +42,9 @@ export class IpcAuthorityError extends Schema.TaggedError<IpcAuthorityError>()(
   'IpcAuthorityError',
   { refusal: Schema.Literals(Object.keys(authorityRefusals) as [keyof typeof authorityRefusals]) },
 ) {
+  get group(): ErrorGroup {
+    return authorityRefusals[this.refusal][0];
+  }
   override get message(): string {
     return authorityRefusals[this.refusal][1];
   }
@@ -53,6 +59,9 @@ const busyLimits = {
 export class IpcBusyError extends Schema.TaggedError<IpcBusyError>()('IpcBusyError', {
   limit: Schema.Literals(Object.keys(busyLimits) as [keyof typeof busyLimits]),
 }) {
+  get group(): ErrorGroup {
+    return busyLimits[this.limit][0];
+  }
   override get message(): string {
     return busyLimits[this.limit][1];
   }
@@ -73,6 +82,9 @@ export class IpcUnavailableError extends Schema.TaggedError<IpcUnavailableError>
     ),
   },
 ) {
+  get group(): ErrorGroup {
+    return 'unavailable';
+  }
   override get message(): string {
     return unavailableFeatures[this.feature];
   }
@@ -94,6 +106,9 @@ export class NativeActionError extends Schema.TaggedError<NativeActionError>()(
     ),
   },
 ) {
+  get group(): ErrorGroup {
+    return nativeActionFailures[this.failure][0];
+  }
   override get message(): string {
     return nativeActionFailures[this.failure][1];
   }
@@ -117,6 +132,9 @@ export class RequestStoreError extends Schema.TaggedError<RequestStoreError>()(
     ),
   },
 ) {
+  get group(): ErrorGroup {
+    return 'storage';
+  }
   override get message(): string {
     return requestStoreFailures[this.failure];
   }
@@ -129,6 +147,9 @@ export class RequestStoreError extends Schema.TaggedError<RequestStoreError>()(
 export class IpcClosedError extends Schema.TaggedError<IpcClosedError>()('IpcClosedError', {
   sent: Schema.Boolean,
 }) {
+  get group(): ErrorGroup {
+    return this.sent ? 'uncertain' : 'unavailable';
+  }
   override get message(): string {
     return this.sent
       ? 'The connection to Moonbase closed after this was sent. Check its outcome.'
@@ -138,6 +159,9 @@ export class IpcClosedError extends Schema.TaggedError<IpcClosedError>()('IpcClo
 
 /** Main's handler failed; what went wrong stays in main. */
 export class IpcFailedError extends Schema.TaggedError<IpcFailedError>()('IpcFailedError', {}) {
+  get group(): ErrorGroup {
+    return 'unavailable';
+  }
   override get message(): string {
     return 'Application effect failed';
   }
@@ -145,42 +169,25 @@ export class IpcFailedError extends Schema.TaggedError<IpcFailedError>()('IpcFai
 
 /** Main's reply could not be read as the procedure's reply. */
 export class IpcReplyError extends Schema.TaggedError<IpcReplyError>()('IpcReplyError', {}) {
+  get group(): ErrorGroup {
+    return 'incompatible';
+  }
   override get message(): string {
     return 'Invalid reply from Moonbase.';
   }
 }
 
+/** The classes of every error desktop IPC itself fails with. */
+export const ipcErrors = [
+  IpcInputError,
+  IpcAuthorityError,
+  IpcBusyError,
+  IpcUnavailableError,
+  NativeActionError,
+  RequestStoreError,
+  IpcFailedError,
+  IpcClosedError,
+  IpcReplyError,
+] as const;
 /** Every error desktop IPC itself fails with. */
-export type IpcError =
-  | IpcInputError
-  | IpcAuthorityError
-  | IpcBusyError
-  | IpcUnavailableError
-  | NativeActionError
-  | RequestStoreError
-  | IpcFailedError
-  | IpcClosedError
-  | IpcReplyError;
-
-/** What a desktop IPC error means for its request, by its reason (see `error-groups`). */
-export function getIpcErrorGroup(error: IpcError): ErrorGroup {
-  switch (error._tag) {
-    case 'IpcInputError':
-      return inputProblems[error.problem][0];
-    case 'IpcAuthorityError':
-      return authorityRefusals[error.refusal][0];
-    case 'IpcBusyError':
-      return busyLimits[error.limit][0];
-    case 'IpcUnavailableError':
-    case 'IpcFailedError':
-      return 'unavailable';
-    case 'NativeActionError':
-      return nativeActionFailures[error.failure][0];
-    case 'RequestStoreError':
-      return 'storage';
-    case 'IpcClosedError':
-      return error.sent ? 'uncertain' : 'unavailable';
-    case 'IpcReplyError':
-      return 'incompatible';
-  }
-}
+export type IpcError = InstanceType<(typeof ipcErrors)[number]>;

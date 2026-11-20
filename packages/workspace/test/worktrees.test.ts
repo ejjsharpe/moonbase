@@ -6,6 +6,7 @@ import {
   isUnavailable,
   isUncertain,
 } from '@moonbase/contracts/error-groups';
+import type { IncompleteCleanupError } from '@moonbase/contracts/workspace-host-errors';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
@@ -43,6 +44,12 @@ function repository() {
   git(['commit', '-qm', 'initial']);
   return { ...f, git };
 }
+/** A creation Git refused, whose own words stay on the host. */
+const gitRefused = (error: unknown) =>
+  isUnavailable(error) && (error as { _tag?: string })._tag === 'WorktreeGitError';
+/** A creation whose cleanup left `remains` behind: its outcome is uncertain. */
+const leftBehind = (remains: IncompleteCleanupError['remains']) => (error: unknown) =>
+  isUncertain(error) && (error as IncompleteCleanupError).remains === remains;
 const branches = (git: (args: string[]) => string) =>
   git(['for-each-ref', '--format=%(refname:short)', 'refs/heads']).split('\n').sort();
 
@@ -213,7 +220,7 @@ test('a failed creation removes the worktree and branch it added', async () => {
     const location = join(f.base, 'hooked');
     await assert.rejects(
       f.client.command('createWorktree', { checkout, base: 'main', branch: 'hooked', location }),
-      (error) => isUnavailable(error) && /hook refused/.test((error as Error).message),
+      gitRefused,
     );
     assert.equal(existsSync(location), false);
     assert.deepEqual(branches(f.git), before);
@@ -436,7 +443,7 @@ test('cleanup removes a worktree this creation still has locked, and its branch'
     const location = join(f.base, 'interrupted');
     await assert.rejects(
       client.command('createWorktree', { checkout, base: 'main', branch: 'interrupted', location }),
-      (error) => isUnavailable(error) && /checkout interrupted/.test((error as Error).message),
+      gitRefused,
     );
     assert.equal(existsSync(location), false);
     assert.deepEqual(branches(f.git), before);
@@ -458,7 +465,7 @@ test('cleanup never forces a worktree locked for any other reason', async () => 
     const location = join(f.base, 'user-locked');
     await assert.rejects(
       client.command('createWorktree', { checkout, base: 'main', branch: 'user-locked', location }),
-      (error) => isUncertain(error) && (error as Error).message.includes(location),
+      leftBehind('other-worktree'),
     );
     assert.equal(readFileSync(join(location, 'file.txt'), 'utf8'), 'main');
     assert.equal(registered(f), 2);
@@ -481,7 +488,7 @@ test('a new worktree is approved only at the location it was made, else kept for
     const location = join(f.base, 'swapped');
     await assert.rejects(
       client.command('createWorktree', { checkout, base: 'main', branch: 'swapped', location }),
-      (error) => isUncertain(error) && /location changed/.test((error as Error).message),
+      leftBehind('location-exists'),
     );
     assert.ok(branches(f.git).includes('swapped'), 'a branch still checked out is kept');
     assert.equal(readFileSync(join(location + '-moved', 'file.txt'), 'utf8'), 'main');
@@ -562,7 +569,7 @@ test('cleanup leaves a worktree another tool added at the location meanwhile', a
     const checkout = await client.command('openCheckout', { root: f.root });
     await assert.rejects(
       client.command('createWorktree', { checkout, base: 'main', branch: 'chat-x', location }),
-      (error) => isUncertain(error) && /another worktree/.test((error as Error).message),
+      leftBehind('other-worktree'),
     );
     assert.equal(readFileSync(join(location, '.env'), 'utf8'), 'SECRET\n');
     assert.equal(registered(f), 2);
@@ -630,7 +637,7 @@ test('a new worktree that resolves into another repository is not approved', asy
     const location = join(f.base, 'elsewhere');
     await assert.rejects(
       client.command('createWorktree', { checkout, base: 'main', branch: 'elsewhere', location }),
-      (error) => isUncertain(error) && /another repository/.test((error as Error).message),
+      leftBehind('location-exists'),
     );
     assert.equal(readFileSync(join(location, 'other.txt'), 'utf8'), 'other');
   } finally {
@@ -719,7 +726,7 @@ test('cleanup leaves a worktree someone else added on this creation’s branch a
     const location = join(f.base, 'taken-over');
     await assert.rejects(
       client.command('createWorktree', { checkout, base: 'main', branch: 'taken-over', location }),
-      (error) => isUncertain(error) && /another worktree/.test((error as Error).message),
+      leftBehind('other-worktree'),
     );
     assert.equal(readFileSync(join(location, 'notes.txt'), 'utf8'), 'mine\n');
     assert.equal(registered(f), 2);
@@ -754,9 +761,7 @@ test('cleanup keeps a branch that moved or became a symbolic ref', async () => {
           branch: change,
           location: join(f.base, change),
         }),
-        (error) =>
-          isUncertain(error) &&
-          (change === 'moved' ? /moved/ : /symbolic/).test((error as Error).message),
+        leftBehind(change === 'moved' ? 'moved-branch' : 'symbolic-branch'),
       );
       assert.ok(branches(f.git).includes('userbr'), 'the branch a symbolic ref names is kept');
       assert.ok(branches(f.git).includes(change));

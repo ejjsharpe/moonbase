@@ -6,7 +6,6 @@ import { LocalHostRpcs, ProviderSetupRpcs } from '@moonbase/contracts/daemon-rpc
 import type { ChatError } from '@moonbase/contracts/chat-errors';
 import type { FolderError } from '@moonbase/contracts/folder-errors';
 import type { ProviderSetupError } from '@moonbase/contracts/provider-errors';
-import { UnauthorizedError, UncertainError } from '@moonbase/contracts/errors';
 import { IncompatibleHostError, type hostErrors } from '@moonbase/contracts/host-errors';
 import type { ChatHostTarget } from '@moonbase/contracts/host';
 import { rpcLimits, rpcPath, rpcProtocol } from '@moonbase/contracts/rpc-upgrade';
@@ -23,30 +22,12 @@ import { makeRpcLink, type ProcedureMethod, type RpcLink } from './rpc-link.ts';
 /** Every procedure a daemon may serve over RPC. */
 export const DaemonRpcs = ChatRpcs.merge(LocalHostRpcs, ProviderSetupRpcs);
 
-/** An error a daemon's procedures declare, as the client presents it. */
+/** An error a daemon's procedures declare. */
 export type RemoteError =
   | ChatError
   | FolderError
   | ProviderSetupError
   | InstanceType<(typeof hostErrors)[number]>;
-
-/**
- * A daemon's own error as the client shows it (D11): its tag and literal reason, decoded into the
- * client's own classes, so its message is the client's fixed text and it carries no cause. Free
- * text a host could fill (the operation an outcome names) is the client's own, and an outcome's
- * target is dropped. A decoded number, such as a command's exit status, is kept.
- */
-export function presentRemoteError<E extends RemoteError>(error: E, operation: string): E {
-  // Each rebuilt error is of its tag's class, so of the type it replaces.
-  switch (error._tag) {
-    case 'UncertainError':
-      return new UncertainError({ operation }) as E;
-    case 'UnauthorizedError':
-      return new UnauthorizedError({ operation }) as E;
-    default:
-      return error;
-  }
-}
 
 /** A watch's update: a whole value, decoded as it arrived, or a delta from the one before it. */
 type Update<K extends WatchKind> =
@@ -94,16 +75,8 @@ export const followWatch = <
   subscribe: (method: ProcedureMethod<DaemonRpc, T>) => Stream.Stream<Update<K>, E>,
   options: { capability: string; check?: (value: WatchValue<K>) => Effect.Effect<void, C> },
 ) =>
-  link.follow<
-    T,
-    Update<K>,
-    E,
-    WatchValue<K>,
-    Exclude<E, RpcClientError>,
-    C | IncompatibleHostError
-  >(operation, subscribe, {
+  link.follow<T, Update<K>, E, WatchValue<K>, C | IncompatibleHostError>(operation, subscribe, {
     capability: options.capability,
-    present: (error) => presentRemoteError(error, operation),
     next: (previous, update) =>
       Effect.gen(function* () {
         if (update.kind === 'delta' && previous === undefined)

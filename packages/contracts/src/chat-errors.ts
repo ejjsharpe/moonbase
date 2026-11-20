@@ -1,4 +1,5 @@
 import * as Schema from 'effect/Schema';
+import type { ErrorGroup } from './error-groups.ts';
 import { UncertainError } from './errors.ts';
 import { FolderRefusedError } from './folder-errors.ts';
 import { IncompatibleHostError, RequestReusedError } from './host-errors.ts';
@@ -34,6 +35,9 @@ export class InvalidChatRequestError extends Schema.TaggedError<InvalidChatReque
   'InvalidChatRequestError',
   { problem: Schema.Literals(Object.keys(requestProblems) as (keyof typeof requestProblems)[]) },
 ) {
+  get group(): ErrorGroup {
+    return 'refusal';
+  }
   override get message() {
     return requestProblems[this.problem];
   }
@@ -41,6 +45,9 @@ export class InvalidChatRequestError extends Schema.TaggedError<InvalidChatReque
 
 /** The conversation is running another turn; the request is kept to retry explicitly. */
 export class ChatBusyError extends Schema.TaggedError<ChatBusyError>()('ChatBusyError', {}) {
+  get group(): ErrorGroup {
+    return 'conflict';
+  }
   override get message() {
     return 'Conversation is busy; retain this request and retry explicitly.';
   }
@@ -62,6 +69,9 @@ export class TranscriptChangedError extends Schema.TaggedError<TranscriptChanged
     change: Schema.Literals(Object.keys(transcriptChanges) as (keyof typeof transcriptChanges)[]),
   },
 ) {
+  get group(): ErrorGroup {
+    return 'conflict';
+  }
   override get message() {
     return transcriptChanges[this.change];
   }
@@ -76,6 +86,9 @@ const accessRefusals = {
 export class ChatAccessError extends Schema.TaggedError<ChatAccessError>()('ChatAccessError', {
   refusal: Schema.Literals(Object.keys(accessRefusals) as (keyof typeof accessRefusals)[]),
 }) {
+  get group(): ErrorGroup {
+    return 'access';
+  }
   override get message() {
     return accessRefusals[this.refusal];
   }
@@ -108,6 +121,9 @@ const storeProblems = {
 export class ChatStoreError extends Schema.TaggedError<ChatStoreError>()('ChatStoreError', {
   problem: Schema.Literals(Object.keys(storeProblems) as (keyof typeof storeProblems)[]),
 }) {
+  get group(): ErrorGroup {
+    return 'storage';
+  }
   override get message() {
     return storeProblems[this.problem];
   }
@@ -125,6 +141,9 @@ export class ChatStoreMismatchError extends Schema.TaggedError<ChatStoreMismatch
     mismatch: Schema.Literals(Object.keys(storeMismatches) as (keyof typeof storeMismatches)[]),
   },
 ) {
+  get group(): ErrorGroup {
+    return 'incompatible';
+  }
   override get message() {
     return storeMismatches[this.mismatch];
   }
@@ -147,6 +166,9 @@ export class ChatUnavailableError extends Schema.TaggedError<ChatUnavailableErro
   'ChatUnavailableError',
   { reason: Schema.Literals(Object.keys(unavailable) as (keyof typeof unavailable)[]) },
 ) {
+  get group(): ErrorGroup {
+    return 'unavailable';
+  }
   override get message() {
     return unavailable[this.reason];
   }
@@ -169,11 +191,6 @@ export const chatErrors = [
 /** Every way a chat host's `ChatService` fails. */
 export type ChatError = InstanceType<(typeof chatErrors)[number]>;
 /** Whether `value` is one of the chat host's errors. */
-export const isChatError = (value: unknown): value is ChatError => {
-  try {
-    return chatErrors.some((error) => value instanceof error);
-  } catch {
-    // A value whose prototype can't be read is no error of ours.
-    return false;
-  }
-};
+export const isChatError: (value: unknown) => value is ChatError = Schema.is(
+  Schema.Union(chatErrors),
+);

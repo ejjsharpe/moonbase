@@ -1,4 +1,5 @@
 import * as Schema from 'effect/Schema';
+import type { ErrorGroup } from './error-groups.ts';
 
 // What provider setup and the encrypted credentials under it fail with (epic #273 D14).
 
@@ -19,6 +20,9 @@ export class ProviderSetupRefusedError extends Schema.TaggedError<ProviderSetupR
   'ProviderSetupRefusedError',
   { reason: Schema.Literals(Object.keys(refusals) as (keyof typeof refusals)[]) },
 ) {
+  get group(): ErrorGroup {
+    return 'refusal';
+  }
   override get message() {
     return refusals[this.reason];
   }
@@ -36,6 +40,9 @@ export class ProviderSetupUnavailableError extends Schema.TaggedError<ProviderSe
   'ProviderSetupUnavailableError',
   { reason: Schema.Literals(Object.keys(unavailable) as (keyof typeof unavailable)[]) },
 ) {
+  get group(): ErrorGroup {
+    return 'unavailable';
+  }
   override get message() {
     return unavailable[this.reason];
   }
@@ -75,6 +82,9 @@ export class CredentialKeyError extends Schema.TaggedError<CredentialKeyError>()
     status: Schema.optional(Schema.Int),
   },
 ) {
+  get group(): ErrorGroup {
+    return 'unavailable';
+  }
   override get message() {
     if (this.problem !== 'keychain-failed') return keyProblems[this.problem];
     const security = this.status === undefined ? 'stopped' : `exited with status ${this.status}`;
@@ -93,6 +103,9 @@ export class CredentialStoreError extends Schema.TaggedError<CredentialStoreErro
   'CredentialStoreError',
   { problem: Schema.Literals(Object.keys(storeProblems) as (keyof typeof storeProblems)[]) },
 ) {
+  get group(): ErrorGroup {
+    return 'storage';
+  }
   override get message() {
     return storeProblems[this.problem];
   }
@@ -108,11 +121,6 @@ export const providerSetupErrors = [
 /** Every way provider setup fails on its host. */
 export type ProviderSetupError = InstanceType<(typeof providerSetupErrors)[number]>;
 /** Whether `value` is one of provider setup's errors. */
-export const isProviderSetupError = (value: unknown): value is ProviderSetupError => {
-  try {
-    return providerSetupErrors.some((error) => value instanceof error);
-  } catch {
-    // A value whose prototype can't be read is no error of ours.
-    return false;
-  }
-};
+export const isProviderSetupError: (value: unknown) => value is ProviderSetupError = Schema.is(
+  Schema.Union(providerSetupErrors),
+);

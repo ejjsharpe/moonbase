@@ -14,7 +14,7 @@ declare const link: RpcLink<DaemonRpc>;
 declare const host: ChatHostTarget;
 declare const read: ChatInput<'getChat'>;
 declare const folder: { host: ChatHostTarget; input: { root: string } };
-const options = { capability: 'chat', present: <E>(error: E) => error };
+const options = { capability: 'chat' };
 
 // A literal tag hands over its own method, which takes its own payload.
 export const literal = link.call('getChat', (method) => method({ host, input: read }), options);

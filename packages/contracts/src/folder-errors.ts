@@ -1,4 +1,5 @@
 import * as Schema from 'effect/Schema';
+import type { ErrorGroup } from './error-groups.ts';
 
 // What a daemon's folder authority fails with (epic #273 D14): its `FolderApprovals`, the
 // `LocalHostService` over them and the chat folder checks.
@@ -20,6 +21,9 @@ export class FolderRefusedError extends Schema.TaggedError<FolderRefusedError>()
     use: Schema.optional(Schema.Literals(Object.keys(uses) as (keyof typeof uses)[])),
   },
 ) {
+  get group(): ErrorGroup {
+    return 'access';
+  }
   override get message() {
     return this.refusal === 'not-approved' && this.use
       ? `Approve this working folder before ${uses[this.use]}.`
@@ -33,6 +37,9 @@ export class FolderMissingError extends Schema.TaggedError<FolderMissingError>()
   'FolderMissingError',
   {},
 ) {
+  get group(): ErrorGroup {
+    return 'refusal';
+  }
   override get message() {
     return 'Choose an existing folder.';
   }
@@ -43,6 +50,9 @@ export class FoldersUnavailableError extends Schema.TaggedError<FoldersUnavailab
   'FoldersUnavailableError',
   {},
 ) {
+  get group(): ErrorGroup {
+    return 'unavailable';
+  }
   override get message() {
     return 'Local folder approvals are unavailable.';
   }
@@ -57,6 +67,9 @@ export class InvalidRootsError extends Schema.TaggedError<InvalidRootsError>()(
   'InvalidRootsError',
   { problem: Schema.Literals(Object.keys(rootProblems) as (keyof typeof rootProblems)[]) },
 ) {
+  get group(): ErrorGroup {
+    return 'refusal';
+  }
   override get message() {
     return rootProblems[this.problem];
   }
@@ -71,11 +84,6 @@ export const folderErrors = [
 /** Every way a daemon's folder approvals fail. */
 export type FolderError = InstanceType<(typeof folderErrors)[number]>;
 /** Whether `value` is one of the folder approvals' errors. */
-export const isFolderError = (value: unknown): value is FolderError => {
-  try {
-    return folderErrors.some((error) => value instanceof error);
-  } catch {
-    // A value whose prototype can't be read is no error of ours.
-    return false;
-  }
-};
+export const isFolderError: (value: unknown) => value is FolderError = Schema.is(
+  Schema.Union(folderErrors),
+);

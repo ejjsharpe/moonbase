@@ -11,9 +11,11 @@ import {
   SubscriptionRef,
   type Scope,
 } from 'effect';
-import type { WorkspaceServiceShape } from '@moonbase/contracts/workspace-service';
+import type {
+  WorkspacePortError,
+  WorkspaceServiceShape,
+} from '@moonbase/contracts/workspace-service';
 import type { CheckoutTarget, DirectoryListing } from '@moonbase/contracts/workspace';
-import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
 import { keepClassification, listingKey, type DiscoveryState } from './discovery.ts';
 import { makeFolderClassification } from './folder-classification.ts';
 
@@ -39,7 +41,7 @@ class FolderKey implements Equal.Equal {
 
 /** A read's request, and the fiber that shows its listing unless a newer read began first. */
 type ReadBegun = {
-  readonly listed: Fiber.Fiber<DirectoryListing, WorkspaceError>;
+  readonly listed: Fiber.Fiber<DirectoryListing, WorkspacePortError>;
   readonly shown: Fiber.Fiber<void>;
 };
 
@@ -87,7 +89,7 @@ export const makeFolderListings = (options: {
     const showListing = (
       folder: FolderKey,
       scope: Scope.Scope,
-      listed: Fiber.Fiber<DirectoryListing, WorkspaceError>,
+      listed: Fiber.Fiber<DirectoryListing, WorkspacePortError>,
       loud: Ref.Ref<boolean>,
     ) =>
       Effect.gen(function* () {
@@ -117,7 +119,7 @@ export const makeFolderListings = (options: {
         const { checkout, path, key } = folder;
         const started = yield* Deferred.make<{
           readonly scope: Scope.Scope;
-          readonly listed: Fiber.Fiber<DirectoryListing, WorkspaceError>;
+          readonly listed: Fiber.Fiber<DirectoryListing, WorkspacePortError>;
         }>();
         const shown = yield* FiberMap.run(
           showing,

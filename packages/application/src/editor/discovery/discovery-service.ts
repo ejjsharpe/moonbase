@@ -16,8 +16,7 @@ import {
   Stream,
   SubscriptionRef,
 } from 'effect';
-import { WorkspaceService } from '@moonbase/contracts/workspace-service';
-import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
+import { WorkspaceService, type WorkspacePortError } from '@moonbase/contracts/workspace-service';
 import type {
   CheckoutTarget,
   DirectoryListing,
@@ -82,9 +81,9 @@ export type EditorDiscoveryShape = {
    */
   readonly read: <A>(
     checkout: CheckoutTarget,
-    effect: Effect.Effect<A, WorkspaceError>,
+    effect: Effect.Effect<A, WorkspacePortError>,
     report?: boolean,
-  ) => Effect.Effect<A, WorkspaceError>;
+  ) => Effect.Effect<A, WorkspacePortError>;
   /**
    * Refreshes a checkout's listings, Git status and comparison. A refresh asked for while one runs
    * joins it, and runs it once more after.

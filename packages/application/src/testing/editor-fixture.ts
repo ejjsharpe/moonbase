@@ -19,6 +19,7 @@ import { CancelledError } from '@moonbase/contracts/errors';
 import { WorkspaceUnavailableError } from '@moonbase/contracts/workspace-host-errors';
 import {
   WorkspaceService,
+  type WorkspacePortError,
   type WorkspaceServiceShape,
 } from '@moonbase/contracts/workspace-service';
 import { isWorkspaceError, type WorkspaceError } from '@moonbase/contracts/workspace-errors';
@@ -85,12 +86,12 @@ export type WorkspaceClient = {
   watch(
     input: { checkout: CheckoutTarget; paths: string[] },
     receive: (event: WorkspaceEvent) => void,
-    onError: (error: WorkspaceError) => void,
+    onError: (error: WorkspacePortError) => void,
   ): () => Promise<void>;
   watchRecovery(
     input: { clientId: string },
     receive: (outline: RecoveryOutline) => void,
-    onError: (error: WorkspaceError) => void,
+    onError: (error: WorkspacePortError) => void,
   ): () => Promise<void>;
 };
 
@@ -117,9 +118,9 @@ export function toWorkspaceClient(
   runtime: ManagedRuntime.ManagedRuntime<WorkspaceService, unknown>,
 ): WorkspaceClient {
   const observe = <A>(
-    stream: Stream.Stream<A, WorkspaceError, WorkspaceService>,
+    stream: Stream.Stream<A, WorkspacePortError, WorkspaceService>,
     receive: (value: A) => void,
-    onError: (error: WorkspaceError) => void,
+    onError: (error: WorkspacePortError) => void,
   ) => {
     let closing = false;
     const fiber = runtime.runFork(
@@ -145,7 +146,9 @@ export function toWorkspaceClient(
       unwrap(
         await runtime.runPromiseExit(
           Effect.flatMap(WorkspaceService, (service) =>
-            (service[operation] as (input: unknown) => Effect.Effect<never, WorkspaceError>)(input),
+            (service[operation] as (input: unknown) => Effect.Effect<never, WorkspacePortError>)(
+              input,
+            ),
           ),
           options,
         ),
@@ -170,11 +173,11 @@ const watchOf =
     watch: (
       input: I,
       receive: (value: A) => void,
-      onError: (error: WorkspaceError) => void,
+      onError: (error: WorkspacePortError) => void,
     ) => () => Promise<void>,
   ) =>
   (input: I) =>
-    Stream.callback<A, WorkspaceError>((queue) =>
+    Stream.callback<A, WorkspacePortError>((queue) =>
       Effect.acquireRelease(
         Effect.try({
           try: () =>

@@ -1,8 +1,6 @@
 import * as Schema from 'effect/Schema';
-import {
-  isRefusal as isContractsRefusal,
-  isUnavailable as isContractsUnavailable,
-} from '@moonbase/contracts/error-groups';
+import type { ErrorGroup } from '@moonbase/contracts/error-groups';
+import type { IpcError } from '@moonbase/contracts/ipc-errors';
 import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
 
 // What the editor itself refuses or reports (epic #273 D14): each reason names what happened and
@@ -66,6 +64,10 @@ export class EditorError extends Schema.TaggedError<EditorError>()('EditorError'
   /** Moonbase's own text that completes the reason, never a host's. */
   detail: Schema.optional(Schema.String),
 }) {
+  get group(): ErrorGroup {
+    if (refusals.has(this.reason)) return 'refusal';
+    return this.reason === 'initializing-already' ? 'conflict' : 'unavailable';
+  }
   override get message(): string {
     const text = reasons[this.reason];
     if (this.reason === 'initializing-unfinished')
@@ -77,13 +79,11 @@ export class EditorError extends Schema.TaggedError<EditorError>()('EditorError'
 export const isEditorError = (value: unknown): value is EditorError =>
   value instanceof Error && (value as { _tag?: unknown })._tag === 'EditorError';
 
-/** Every way an editor action fails: the editor's own refusals and the workspace's errors. */
-export type EditorFailure = EditorError | WorkspaceError;
+/**
+ * Every way an editor action fails: the editor's own refusals, the workspace's errors and, in a
+ * window, desktop IPC's.
+ */
+export type EditorFailure = EditorError | WorkspaceError | IpcError;
 
-/** The store, host or editor refused the request as given: it was never admitted. */
-export const isRefusal = (error: unknown) =>
-  isContractsRefusal(error) || (isEditorError(error) && refusals.has(error.reason));
-/** The host could not be reached (a restarted daemon, say): watching again may succeed. */
-export const isUnavailable = (error: unknown) =>
-  isContractsUnavailable(error) ||
-  (isEditorError(error) && !refusals.has(error.reason) && error.reason !== 'initializing-already');
+// Each error declares its group, the editor's as well, so the editor asks `error-groups` too.
+export { isRefusal, isUnavailable } from '@moonbase/contracts/error-groups';

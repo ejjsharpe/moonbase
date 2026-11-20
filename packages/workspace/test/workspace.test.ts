@@ -486,22 +486,12 @@ test('text search honours ignore policies, options, context lines and UTF-16 ran
     assert.equal((await search('follow.nd(')).files.length, 0);
     assert.equal((await search('follow.nd\\(', { regex: true })).files[0].path, 'src/view.ts');
     await assert.rejects(search('(', { regex: true }), isRefusal);
-    // ripgrep's reason is shown, not its trailing hint, and every pattern refusal is invalid input.
-    await assert.rejects(
-      search('(?<=x)y', { regex: true }),
-      (error) =>
-        isRefusal(error) &&
-        /^Invalid regular expression: look-around.* is not supported$/.test(
-          (error as Error).message,
-        ),
-    );
-    await assert.rejects(
-      search('a\\nb', { regex: true }),
-      (error) =>
-        isRefusal(error) &&
-        (error as Error).message ===
-          'Invalid regular expression: the literal "\\n" is not allowed in a regex',
-    );
+    // Every pattern ripgrep reports it cannot compile is invalid input; its reason stays on the host.
+    for (const pattern of ['(?<=x)y', 'a\\nb'])
+      await assert.rejects(
+        search(pattern, { regex: true }),
+        (error) => isRefusal(error) && (error as { _tag?: string })._tag === 'InvalidPatternError',
+      );
     // Past 50 matches a file is capped and reported partial, whether its matches are adjacent
     // (ripgrep keeps reporting matches inside trailing context) or spread out.
     writeFileSync(join(f.root, 'src/many.ts'), 'manyMatch\n'.repeat(60));

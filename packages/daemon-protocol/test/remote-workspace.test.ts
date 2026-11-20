@@ -13,15 +13,9 @@ import {
 } from '@moonbase/contracts/rpc-upgrade';
 import type { WorkspaceEvent } from '@moonbase/contracts/workspace';
 import {
-  BranchTakenError,
   CheckoutAccessError,
-  GitStatusFormatError,
-  IncompleteCleanupError,
   InterruptedRequestError,
-  InvalidBaseError,
-  InvalidPatternError,
   RecordedRefusalError,
-  WorkspaceStoreError,
   WorktreeGitError,
 } from '@moonbase/contracts/workspace-host-errors';
 import { UncertainError } from '@moonbase/contracts/errors';
@@ -312,20 +306,16 @@ test('an upgrade the daemon refuses, or a host that does not prove the key, is n
   assert.deepEqual(files.calls, ['readFile']);
 });
 
-test('a host’s errors reach the client with their codes and the client’s own text, never the host’s', async (t) => {
+test('a host’s errors reach the client with their codes, and a failure it doesn’t declare carries none of its text', async (t) => {
+  // What a daemon could write into an error it declares is covered on the wire in
+  // `client/rpc-link.test.ts`; here the real server and client pass the codes on.
   const secret = '/private/host-secret';
   const raised = [
-    new WorktreeGitError({ detail: secret }),
-    new InvalidPatternError({ reason: secret }),
-    new InvalidBaseError({ base: secret }),
-    new GitStatusFormatError({ record: secret }),
-    new IncompleteCleanupError({ remains: secret, inspect: secret, failure: secret }),
-    new RecordedRefusalError({ refusal: 'conflict', text: secret }),
-    new WorkspaceStoreError({ failure: 'publication', detail: secret }),
+    new WorktreeGitError(),
+    new RecordedRefusalError({ refusal: 'conflict' }),
     new InterruptedRequestError({ operation: secret }),
     new UncertainError({ operation: secret, target: { ...fileTarget, path: secret } }),
     new CheckoutAccessError({ refusal: 'not-approved' }),
-    new BranchTakenError({ branch: secret, inside: true }),
     new Error(secret),
   ];
   const files = controlledWorkspace();
@@ -343,34 +333,12 @@ test('a host’s errors reach the client with their codes and the client’s own
   }
   assert.deepEqual(codes, [
     'unavailable',
-    'refusal',
-    'refusal',
-    'unavailable',
-    'uncertain',
     'conflict',
-    'storage',
     'uncertain',
     'uncertain',
     'access',
-    'conflict',
     'unavailable',
   ]);
-  // A branch `createWorktree` found taken is named as the client asked for it.
-  files.handlers.createWorktree = async () => {
-    throw new BranchTakenError({ branch: secret, inside: false });
-  };
-  const taken = await failure(
-    run,
-    workspace.createWorktree({
-      installationId: identity.installationId,
-      requestId: 'w',
-      checkout: { ...checkout, vcs: 'git', branch: 'main', worktree: 'main' },
-      branch: 'feature',
-      base: 'main',
-      location: '/work-b',
-    }),
-  );
-  assert(taken.message.includes('feature') && !taken.message.includes(secret));
 });
 
 const operation = {

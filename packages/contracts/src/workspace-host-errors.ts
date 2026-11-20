@@ -1,12 +1,16 @@
 import * as Schema from 'effect/Schema';
-import type { CancelledError, UncertainError } from './errors.ts';
-import { isDaemonServiceError } from './error-groups.ts';
+import { chatErrors } from './chat-errors.ts';
+import { ConnectionError, HostVerificationError, LocalDaemonError } from './connection-errors.ts';
+import type { ErrorGroup } from './error-groups.ts';
+import { CancelledError, UncertainError } from './errors.ts';
+import { folderErrors } from './folder-errors.ts';
+import { hostErrors, RequestReusedError } from './host-errors.ts';
+import { providerSetupErrors } from './provider-errors.ts';
 import type { LocalHostServiceError } from './services.ts';
 
 // What the workspace file host fails with (epic #273 D14). Each error names what happened with a
-// `kind` (and the names it concerns), and builds its message from them. A field that holds text
-// the host wrote (Git's output, a path, a pattern's reason) is optional: a client drops it from an
-// error a daemon sent (D11).
+// literal, and builds its message and group from it. None holds text the host wrote (Git's output,
+// a path, a pattern's reason), so one decoded from a daemon carries none (D11).
 
 const pathProblems = {
   'not-relative': 'Use an exact checkout-relative path without traversal, links or metadata.',
@@ -28,6 +32,9 @@ const pathProblems = {
 export class InvalidPathError extends Schema.TaggedError<InvalidPathError>()('InvalidPathError', {
   problem: Schema.Literals(Object.keys(pathProblems) as (keyof typeof pathProblems)[]),
 }) {
+  get group(): ErrorGroup {
+    return 'refusal';
+  }
   override get message() {
     return pathProblems[this.problem];
   }
@@ -50,6 +57,9 @@ export class CheckoutAccessError extends Schema.TaggedError<CheckoutAccessError>
   'CheckoutAccessError',
   { refusal: Schema.Literals(Object.keys(accessRefusals) as (keyof typeof accessRefusals)[]) },
 ) {
+  get group(): ErrorGroup {
+    return 'access';
+  }
   override get message() {
     return accessRefusals[this.refusal];
   }
@@ -75,6 +85,9 @@ export class CheckoutChangedError extends Schema.TaggedError<CheckoutChangedErro
   'CheckoutChangedError',
   { change: Schema.Literals(Object.keys(changes) as (keyof typeof changes)[]) },
 ) {
+  get group(): ErrorGroup {
+    return 'refusal';
+  }
   override get message() {
     return changes[this.change];
   }
@@ -126,6 +139,9 @@ export class InvalidRequestError extends Schema.TaggedError<InvalidRequestError>
   'InvalidRequestError',
   { problem: Schema.Literals(Object.keys(requestProblems) as (keyof typeof requestProblems)[]) },
 ) {
+  get group(): ErrorGroup {
+    return 'refusal';
+  }
   override get message() {
     return requestProblems[this.problem];
   }
@@ -146,29 +162,35 @@ export class NativeSourceError extends Schema.TaggedError<NativeSourceError>()(
     ),
   },
 ) {
+  get group(): ErrorGroup {
+    return 'refusal';
+  }
   override get message() {
     return nativeSourceProblems[this.problem];
   }
 }
 /** A worktree base that names no commit. */
-export class InvalidBaseError extends Schema.TaggedError<InvalidBaseError>()('InvalidBaseError', {
-  base: Schema.optional(Schema.String),
-}) {
+export class InvalidBaseError extends Schema.TaggedError<InvalidBaseError>()(
+  'InvalidBaseError',
+  {},
+) {
+  get group(): ErrorGroup {
+    return 'refusal';
+  }
   override get message() {
-    return this.base === undefined
-      ? 'The base is not a commit.'
-      : `Base ${this.base} is not a commit.`;
+    return 'The base is not a commit.';
   }
 }
-/** A search pattern ripgrep cannot compile, with its reason. */
+/** A search pattern ripgrep cannot compile. */
 export class InvalidPatternError extends Schema.TaggedError<InvalidPatternError>()(
   'InvalidPatternError',
-  { reason: Schema.optional(Schema.String) },
+  {},
 ) {
+  get group(): ErrorGroup {
+    return 'refusal';
+  }
   override get message() {
-    return this.reason === undefined
-      ? 'Invalid regular expression.'
-      : 'Invalid regular expression: ' + this.reason;
+    return 'Invalid regular expression.';
   }
 }
 
@@ -189,23 +211,24 @@ export class WorkspaceConflictError extends Schema.TaggedError<WorkspaceConflict
   'WorkspaceConflictError',
   { conflict: Schema.Literals(Object.keys(conflicts) as (keyof typeof conflicts)[]) },
 ) {
+  get group(): ErrorGroup {
+    return 'conflict';
+  }
   override get message() {
     return conflicts[this.conflict];
   }
 }
 /** A branch name that is taken: as a branch, or by branches inside it. */
 export class BranchTakenError extends Schema.TaggedError<BranchTakenError>()('BranchTakenError', {
-  branch: Schema.optional(Schema.String),
   inside: Schema.Boolean,
 }) {
+  get group(): ErrorGroup {
+    return 'conflict';
+  }
   override get message() {
-    if (this.branch === undefined)
-      return this.inside
-        ? 'Branches inside that branch name already exist.'
-        : 'That branch already exists.';
     return this.inside
-      ? `Branches inside ${this.branch}/ already exist.`
-      : `Branch ${this.branch} already exists.`;
+      ? 'Branches inside that branch name already exist.'
+      : 'That branch already exists.';
   }
 }
 
@@ -222,29 +245,35 @@ export class WorkspaceUnavailableError extends Schema.TaggedError<WorkspaceUnava
   'WorkspaceUnavailableError',
   { cause: Schema.Literals(Object.keys(unavailable) as (keyof typeof unavailable)[]) },
 ) {
+  get group(): ErrorGroup {
+    return 'unavailable';
+  }
   override get message() {
     return unavailable[this.cause];
   }
 }
-/** Git refused to make a worktree; `detail` is what it said (its own output, or a fixed text). */
-export class WorktreeGitError extends Schema.TaggedError<WorktreeGitError>()('WorktreeGitError', {
-  detail: Schema.optional(Schema.String),
-}) {
+/** Git refused to make a worktree. */
+export class WorktreeGitError extends Schema.TaggedError<WorktreeGitError>()(
+  'WorktreeGitError',
+  {},
+) {
+  get group(): ErrorGroup {
+    return 'unavailable';
+  }
   override get message() {
-    return (
-      'Git could not create the worktree.' + (this.detail === undefined ? '' : ' ' + this.detail)
-    );
+    return 'Git could not create the worktree.';
   }
 }
 /** Git printed a status record the host cannot read. */
 export class GitStatusFormatError extends Schema.TaggedError<GitStatusFormatError>()(
   'GitStatusFormatError',
-  { record: Schema.optional(Schema.String) },
+  {},
 ) {
+  get group(): ErrorGroup {
+    return 'unavailable';
+  }
   override get message() {
-    return this.record === undefined
-      ? 'Unrecognized Git status record.'
-      : `Unrecognized Git status record: ${JSON.stringify(this.record)}`;
+    return 'Unrecognized Git status record.';
   }
 }
 
@@ -259,6 +288,9 @@ export class WorkspaceUnsupportedError extends Schema.TaggedError<WorkspaceUnsup
   'WorkspaceUnsupportedError',
   { feature: Schema.Literals(Object.keys(unsupported) as (keyof typeof unsupported)[]) },
 ) {
+  get group(): ErrorGroup {
+    return 'incompatible';
+  }
   override get message() {
     return unsupported[this.feature];
   }
@@ -266,20 +298,20 @@ export class WorkspaceUnsupportedError extends Schema.TaggedError<WorkspaceUnsup
 
 const storeFailures = {
   'invalid-data': 'Invalid workspace saved data. Original data retained; publication blocked.',
-  publication: 'Workspace journal publication failed; retain drafts and retry. ',
-  reservation: 'Workspace request reservation failed; no mutation admitted. ',
+  publication: 'Workspace journal publication failed; retain drafts and retry.',
+  reservation: 'Workspace request reservation failed; no mutation admitted.',
   failed: 'Application effect failed',
 } as const;
-/** The store could not be read or written. A failed write names the safe text of what failed. */
+/** The store could not be read or written. */
 export class WorkspaceStoreError extends Schema.TaggedError<WorkspaceStoreError>()(
   'WorkspaceStoreError',
-  {
-    failure: Schema.Literals(Object.keys(storeFailures) as (keyof typeof storeFailures)[]),
-    detail: Schema.optional(Schema.String),
-  },
+  { failure: Schema.Literals(Object.keys(storeFailures) as (keyof typeof storeFailures)[]) },
 ) {
-  override get message() {
-    return storeFailures[this.failure] + (this.detail ?? '');
+  get group(): ErrorGroup {
+    return 'storage';
+  }
+  override get message(): string {
+    return storeFailures[this.failure];
   }
 }
 
@@ -296,6 +328,9 @@ export class UnresolvedWorkError extends Schema.TaggedError<UnresolvedWorkError>
   'UnresolvedWorkError',
   { state: Schema.Literals(Object.keys(unresolved) as (keyof typeof unresolved)[]) },
 ) {
+  get group(): ErrorGroup {
+    return 'uncertain';
+  }
   override get message() {
     return unresolved[this.state];
   }
@@ -305,43 +340,58 @@ export class InterruptedRequestError extends Schema.TaggedError<InterruptedReque
   'InterruptedRequestError',
   { operation: Schema.String },
 ) {
+  get group(): ErrorGroup {
+    return 'uncertain';
+  }
   override get message() {
     return `The earlier ${this.operation} was interrupted. Inspect the repository; do not repeat it.`;
   }
 }
-/**
- * A worktree creation stopped or failed and could not undo all it made: `remains` says what is
- * left, `inspect` what to look at and `failure` what went wrong first.
- */
+const leftovers = {
+  'other-worktree': 'another worktree is at the location',
+  'parent-changed': 'the location parent changed',
+  'location-exists': 'the location still exists',
+  'symbolic-branch': 'the branch was replaced by a symbolic ref',
+  'moved-branch': 'the branch has moved since it was made',
+  'branch-exists': 'the branch still exists',
+  'unconfirmed-branch':
+    'the branch still exists and its reflog does not confirm this creation made it',
+  'cleanup-failed': 'cleanup could not finish',
+} as const;
+/** A worktree creation stopped or failed and could not undo all it made: `remains` says what is left. */
 export class IncompleteCleanupError extends Schema.TaggedError<IncompleteCleanupError>()(
   'IncompleteCleanupError',
-  {
-    remains: Schema.optional(Schema.String),
-    inspect: Schema.optional(Schema.String),
-    failure: Schema.optional(Schema.String),
-  },
+  { remains: Schema.Literals(Object.keys(leftovers) as (keyof typeof leftovers)[]) },
 ) {
-  override get message() {
-    const remains = this.remains === undefined ? '' : ` (${this.remains})`,
-      inspect = this.inspect ?? 'the worktree location';
-    return this.failure === undefined
-      ? `Worktree creation stopped and cleanup is incomplete${remains}. Inspect ${inspect}.`
-      : `Worktree creation failed and cleanup is incomplete${remains}. Inspect ${inspect}. ${this.failure}`;
+  get group(): ErrorGroup {
+    return 'uncertain';
+  }
+  override get message(): string {
+    return `Worktree creation stopped and cleanup is incomplete (${leftovers[this.remains]}). Inspect the worktree location and its branch.`;
   }
 }
+
+const recordedRefusals = {
+  invalid: ['refusal', 'The host refused this request as invalid.'],
+  unauthorized: ['access', 'The host did not authorize this request.'],
+  conflict: ['conflict', 'The host found a conflict with this request.'],
+  incompatible: ['incompatible', 'The host’s authority or protocol is incompatible.'],
+} as const satisfies Record<string, readonly [ErrorGroup, string]>;
 /**
- * A recorded refusal of a request, replayed with its text for the same request ID: `refusal` says
- * which kind the original was (see `error-groups`).
+ * A recorded refusal of a request, replayed for the same request ID: `refusal` says which kind
+ * the original was.
  */
 export class RecordedRefusalError extends Schema.TaggedError<RecordedRefusalError>()(
   'RecordedRefusalError',
   {
-    refusal: Schema.Literals(['invalid', 'unauthorized', 'conflict', 'incompatible']),
-    text: Schema.String,
+    refusal: Schema.Literals(Object.keys(recordedRefusals) as (keyof typeof recordedRefusals)[]),
   },
 ) {
-  override get message() {
-    return this.text;
+  get group(): ErrorGroup {
+    return recordedRefusals[this.refusal][0];
+  }
+  override get message(): string {
+    return recordedRefusals[this.refusal][1];
   }
 }
 
@@ -395,11 +445,19 @@ export const fileHostErrors = [
  */
 export type WorkspaceHostError = FileHostError | LocalHostServiceError;
 
-const fileHostTags: ReadonlySet<string> = new Set(fileHostErrors.map((error) => error.identifier));
-const isFileHostError = (value: unknown): value is FileHostError => {
-  const tag = value instanceof Error ? (value as { _tag?: unknown })._tag : undefined;
-  return typeof tag === 'string' && fileHostTags.has(tag);
-};
-/** Whether `value` is one of the file host's errors. */
-export const isWorkspaceHostError = (value: unknown): value is WorkspaceHostError =>
-  isFileHostError(value) || isDaemonServiceError(value);
+/** Whether `value` is one of the file host's errors, a daemon service's or its link's. */
+export const isWorkspaceHostError: (value: unknown) => value is WorkspaceHostError = Schema.is(
+  Schema.Union([
+    ...fileHostErrors,
+    ...chatErrors,
+    ...folderErrors,
+    ...providerSetupErrors,
+    ...hostErrors,
+    RequestReusedError,
+    UncertainError,
+    CancelledError,
+    ConnectionError,
+    HostVerificationError,
+    LocalDaemonError,
+  ]),
+) as (value: unknown) => value is WorkspaceHostError;

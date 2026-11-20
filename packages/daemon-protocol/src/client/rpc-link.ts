@@ -21,7 +21,7 @@ import {
   HostVerificationError,
   LocalDaemonError,
 } from '@moonbase/contracts/connection-errors';
-import { CancelledError, UncertainError } from '@moonbase/contracts/errors';
+import { CancelledError, UnauthorizedError, UncertainError } from '@moonbase/contracts/errors';
 import {
   HostUnavailableError,
   IncompatibleHostError,
@@ -31,7 +31,8 @@ import type { ChatHostHealth, ChatHostTarget } from '@moonbase/contracts/host';
 import { isMutationRpc } from '@moonbase/contracts/rpc-annotations';
 import { rpcLimits } from '@moonbase/contracts/rpc-upgrade';
 import { ConnectionService, type VerifiedChatEndpoint } from '@moonbase/contracts/services';
-import { declaredErrorsOf, isOneOf, type Procedure } from '../declared-errors.ts';
+import { InterruptedRequestError } from '@moonbase/contracts/workspace-host-errors';
+import { declaredErrorsOf, isDeclaredBy, type Procedure } from '../declared-errors.ts';
 import * as P from './protocol.ts';
 import { reconnectSchedule } from './reconnect-schedule.ts';
 import {
@@ -49,7 +50,7 @@ export type RpcLinkConfiguration<Rpcs extends Rpc.Any> = RpcSocketConfiguration<
 };
 /** A declared error, as the procedure's union decodes it: whatever its client fails with but the transport's. */
 type Declared<E> = Exclude<E, RpcClientError>;
-export type CallOptions<A, E, P, C> = {
+export type CallOptions<A, C> = {
   capability: string;
   /** How long to wait for the reply; `requestDeadlineMs` by default. */
   deadlineMs?: number;
@@ -59,18 +60,11 @@ export type CallOptions<A, E, P, C> = {
    * the daemon has answered or the connection closed, even after its caller gave up on it.
    */
   places?: readonly Hold[];
-  /**
-   * An error the procedure declares as the client shows it (D11): its own text, none of the
-   * host's.
-   */
-  present(error: Declared<E>): P;
   /** Refuses a reply against the daemon's signed health. */
   check?: (output: A, health: ChatHostHealth) => Effect.Effect<void, C>;
 };
-export type FollowOptions<U, E, A, P, C> = {
+export type FollowOptions<U, A, C> = {
   capability: string;
-  /** An error the watch declares as the client shows it (D11). */
-  present(error: Declared<E>): P;
   /**
    * The value a watch update describes, given the value before it on this subscription (none for
    * its first): it checks the update, and fails to refuse it.
@@ -93,11 +87,11 @@ export type ProcedureMethod<
 export interface RpcLink<Rpcs extends Rpc.Any> {
   readonly host: ChatHostTarget;
   /** Sends one request; it fails with the errors its procedure declares, or the link's own. */
-  call<K extends Rpc.Tag<Rpcs>, A, E, P, C = never>(
+  call<K extends Rpc.Tag<Rpcs>, A, E, C = never>(
     operation: K,
     send: (method: ProcedureMethod<Rpcs, K>) => Effect.Effect<A, E>,
-    options: CallOptions<A, E, P, C>,
-  ): Effect.Effect<A, P | C | DaemonLinkError>;
+    options: CallOptions<A, C>,
+  ): Effect.Effect<A, Declared<E> | C | DaemonLinkError>;
   /**
    * Follows a watch: each update turned into the value it describes by `next`. When its
    * connection drops, or the daemon ends it interrupted, it subscribes again on
@@ -105,21 +99,36 @@ export interface RpcLink<Rpcs extends Rpc.Any> {
    * when the daemon ends it otherwise, the connection generation changes, the connection is
    * given up on or the schedule runs out.
    */
-  follow<K extends Rpc.Tag<Rpcs>, U, E, A, P, C = never>(
+  follow<K extends Rpc.Tag<Rpcs>, U, E, A, C = never>(
     operation: K,
     subscribe: (method: ProcedureMethod<Rpcs, K>) => Stream.Stream<U, E>,
-    options: FollowOptions<U, E, A, P, C>,
-  ): Stream.Stream<WatchUpdate<A>, P | C | DaemonLinkError>;
+    options: FollowOptions<U, A, C>,
+  ): Stream.Stream<WatchUpdate<A>, Declared<E> | C | DaemonLinkError>;
 }
 
 /** Each procedure of a group: the errors it declares, and whether it is a mutation. */
 const describeProcedures = <Rpcs extends Procedure>(group: RpcGroup.RpcGroup<Rpcs>) =>
   new Map(
-    [...group.requests].map(([tag, rpc]) => [
-      tag,
-      { errors: declaredErrorsOf(rpc), mutation: isMutationRpc(rpc) },
-    ]),
+    [...group.requests].map(([tag, rpc]) => {
+      const errors = declaredErrorsOf(rpc);
+      return [tag, { errors, isDeclared: isDeclaredBy(errors), mutation: isMutationRpc(rpc) }];
+    }),
   );
+
+/**
+ * A declared error as the client shows it (D11). Decoding it kept only its literal fields, so it
+ * carries no cause or text the host wrote, but for the operation a shared outcome names, which is
+ * the client's own, and a target, which it drops.
+ */
+export const toClientError = <E>(error: E, operation: string): E => {
+  // Each rebuilt error is of its own class, so of the type it replaces.
+  if (error instanceof UncertainError) return new UncertainError({ operation }) as E;
+  if (error instanceof UnauthorizedError) return new UnauthorizedError({ operation }) as E;
+  if (error instanceof CancelledError) return new CancelledError({ operation }) as E;
+  if (error instanceof InterruptedRequestError)
+    return new InterruptedRequestError({ operation }) as E;
+  return error;
+};
 
 const unavailable = (reason: HostUnavailableError['reason'] = 'closed') =>
   new HostUnavailableError({ reason });
@@ -135,7 +144,7 @@ const notServed = () => new IncompatibleHostError({ reason: 'not-served' });
  * interrupted, as a closing RPC server does. It is subscribed again, and never leaves the link.
  */
 class SubscriptionLost extends Data.TaggedError('SubscriptionLost') {}
-/** A watch's failure its own `present` or `next` gave: it leaves the link as it is. */
+/** A watch's failure its daemon declared, or its own `next` gave: it leaves the link as it is. */
 class Refused<E> extends Data.TaggedError('Refused')<{ error: E }> {}
 /** Whether a failure came from the transport rather than the daemon. */
 const isTransport = (error: unknown) => {
@@ -254,15 +263,14 @@ export const makeRpcLink = <Rpcs extends Procedure>(
     const lookUpEndpoint = connections.endpoint({ host });
     const procedures = describeProcedures(config.group);
     const describe = (operation: string) => procedures.get(operation)!;
-    const linkErrors = [
-      ...new Set([...procedures.values()].flatMap((procedure) => procedure.errors)),
+    /** Whether a failure is the daemon's (as the client shows it) or the link's own, rather than unknown. */
+    const isLinkError = isDeclaredBy(
+      ...new Set([...procedures.values()].map((procedure) => procedure.errors)),
       ConnectionError,
       HostVerificationError,
       LocalDaemonError,
       CancelledError,
-    ];
-    /** Whether a failure is the daemon's (as presented) or the link's own, rather than unknown. */
-    const isLinkError = (error: unknown): error is DaemonLinkError => isOneOf(linkErrors, error);
+    ) as (error: unknown) => error is DaemonLinkError;
     const linkScope = yield* Effect.scope;
     const sockets: RcMap.RcMap<Generation, RpcConnection<Rpcs>> = yield* RcMap.make({
       lookup: (generation: Generation): Effect.Effect<RpcConnection<Rpcs>, never, Scope.Scope> =>
@@ -299,7 +307,7 @@ export const makeRpcLink = <Rpcs extends Procedure>(
 
     const call: RpcLink<Rpcs>['call'] = (operation, send, options) =>
       Effect.gen(function* () {
-        const { errors, mutation } = describe(operation);
+        const { isDeclared, mutation } = describe(operation);
         const endpoint = yield* lookUpEndpoint;
         const connection = yield* connect(endpoint);
         const health = yield* connection.ready.pipe(
@@ -343,7 +351,7 @@ export const makeRpcLink = <Rpcs extends Procedure>(
           if (error === unsent) return yield* Effect.fail(unsent);
           // Only an error the procedure declares is the daemon's answer; anything else lost it,
           // to a generation change if there was one.
-          if (interrupted || isTransport(error) || !isOneOf(errors, error))
+          if (interrupted || isTransport(error) || !isDeclared(error))
             return yield* Effect.fail(
               (yield* isCurrent(endpoint))
                 ? lostReply(mutation, operation)
@@ -356,7 +364,10 @@ export const makeRpcLink = <Rpcs extends Procedure>(
         if (Exit.isFailure(exit))
           // A failure of the procedure's declared union, as the check above found.
           return yield* Effect.fail(
-            options.present(Cause.squash(exit.cause) as Parameters<typeof options.present>[0]),
+            toClientError(
+              Cause.squash(exit.cause) as Declared<Effect.Error<ReturnType<typeof send>>>,
+              operation,
+            ),
           );
         const output = exit.value;
         if (options.check)
@@ -372,12 +383,12 @@ export const makeRpcLink = <Rpcs extends Procedure>(
       if (error instanceof Refused) return error.error as R;
       return isLinkError(error) ? error : unavailable();
     };
-    const follow = <K extends Rpc.Tag<Rpcs>, U, E, A, P, C>(
+    const follow = <K extends Rpc.Tag<Rpcs>, U, E, A, C>(
       operation: K,
       subscribe: (method: ProcedureMethod<Rpcs, K>) => Stream.Stream<U, E>,
-      options: FollowOptions<U, E, A, P, C>,
+      options: FollowOptions<U, A, C>,
     ) =>
-      Stream.callback<WatchUpdate<A>, P | C | DaemonLinkError>(
+      Stream.callback<WatchUpdate<A>, Declared<E> | C | DaemonLinkError>(
         (queue) =>
           Effect.gen(function* () {
             const first = yield* lookUpEndpoint;
@@ -403,7 +414,7 @@ export const makeRpcLink = <Rpcs extends Procedure>(
             // When this subscription delivered its first value: one that had been delivering for
             // `renewMs` renews the reconnect budget.
             const firstAt = yield* Ref.make<number | undefined>(undefined);
-            const { errors } = describe(operation);
+            const { isDeclared } = describe(operation);
             const resubscribe = Effect.gen(function* () {
               yield* Ref.set(firstAt, undefined);
               const endpoint = yield* lookUpEndpoint;
@@ -417,11 +428,9 @@ export const makeRpcLink = <Rpcs extends Procedure>(
               let reset = yield* Ref.get(delivered);
               const updates = subscribe(connection.client[operation]).pipe(
                 Stream.mapError((error) =>
-                  isTransport(error) || !isOneOf(errors, error)
+                  isTransport(error) || !isDeclared(error)
                     ? error
-                    : new Refused({
-                        error: options.present(error as Parameters<typeof options.present>[0]),
-                      }),
+                    : new Refused({ error: toClientError(error, operation) }),
                 ),
               );
               yield* Stream.runForEach(updates, (update) =>
@@ -468,7 +477,7 @@ export const makeRpcLink = <Rpcs extends Procedure>(
               Effect.asVoid(
                 Queue.failCause(
                   queue,
-                  Cause.fail(leaving<P | C | IncompatibleHostError>(Cause.squash(cause))),
+                  Cause.fail(leaving<Declared<E> | C | IncompatibleHostError>(Cause.squash(cause))),
                 ),
               ),
             ),

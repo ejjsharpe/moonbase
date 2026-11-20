@@ -14,7 +14,7 @@ import {
   RecordedRefusalError,
 } from '@moonbase/contracts/workspace-host-errors';
 
-test('a failure is grouped by its tag, or by its reason where one class covers several', () => {
+test('a failure has the group its class declares, from its reason where one class covers several', () => {
   for (const [error, group] of [
     [new InvalidPathError({ problem: 'not-relative' }), 'refusal'],
     [new ChatBusyError(), 'conflict'],
@@ -25,14 +25,14 @@ test('a failure is grouped by its tag, or by its reason where one class covers s
     [new ConnectionError({ reason: 'stale-generation' }), 'conflict'],
     [new ConnectionError({ reason: 'closed' }), 'unavailable'],
     [new HostVerificationError({ reason: 'rejected' }), 'access'],
-    [new RecordedRefusalError({ refusal: 'unauthorized', text: 'Refused.' }), 'access'],
+    [new RecordedRefusalError({ refusal: 'unauthorized' }), 'access'],
     [new IpcClosedError({ sent: true }), 'uncertain'],
     [new IpcClosedError({ sent: false }), 'unavailable'],
   ] as const)
     assert.equal(getErrorGroup(error), group, error._tag);
 });
 
-test('a decoded error keeps its group, and anything contracts does not define has none', () => {
+test('a decoded error keeps its group, and anything Moonbase does not define has none', () => {
   const schema = Schema.Union(chatProjectErrors);
   const decoded = Schema.decodeUnknownSync(schema)(
     Schema.encodeSync(schema)(new UncertainError({ operation: 'Save' })),

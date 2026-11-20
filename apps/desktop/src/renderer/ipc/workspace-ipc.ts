@@ -1,5 +1,4 @@
 import { Effect, Layer, Stream } from 'effect';
-import type { WorkspaceError } from '@moonbase/contracts/workspace-errors';
 import {
   WorkspaceService,
   type WorkspaceServiceShape,
@@ -8,13 +7,6 @@ import type { DesktopIpc } from './desktop-ipc.ts';
 import { callEffect, watchStream, type Payload, type Refusal, type Tag } from './ipc-failures.ts';
 
 const refused: Refusal = 'workspace-request';
-// `WorkspaceService` declares only the workspace's errors (`WorkspaceError`), not desktop IPC's
-// own, which the editor reads by their group (`error-groups`): a procedure's failures pass to it
-// untyped.
-const asPortFailure = <A, E>(effect: Effect.Effect<A, E>) =>
-  effect as Effect.Effect<A, never> as Effect.Effect<A, WorkspaceError>;
-const asPortStreamFailure = <A, E>(stream: Stream.Stream<A, E>) =>
-  stream as Stream.Stream<A, never> as Stream.Stream<A, WorkspaceError>;
 
 /**
  * The renderer's `WorkspaceService`: each command and watch is main's editor procedure over this
@@ -26,7 +18,7 @@ export const WorkspaceIpcLive = Layer.effect(
   Effect.gen(function* () {
     const context = yield* Effect.context<DesktopIpc>();
     const call = <T extends Tag>(tag: T, input: Payload<T>) =>
-      asPortFailure(callEffect(tag, input, refused).pipe(Effect.provideContext(context)));
+      callEffect(tag, input, refused).pipe(Effect.provideContext(context));
     return {
       openCheckout: (input) => call('openCheckout', input),
       readFile: (input) => call('readFile', input),
@@ -50,13 +42,9 @@ export const WorkspaceIpcLive = Layer.effect(
       updateDraft: (input) => call('updateDraft', input),
       updateLayout: (input) => call('updateLayout', input),
       watch: (input) =>
-        asPortStreamFailure(
-          watchStream('watchWorkspace', input, refused).pipe(Stream.provideContext(context)),
-        ),
+        watchStream('watchWorkspace', input, refused).pipe(Stream.provideContext(context)),
       watchRecovery: (input) =>
-        asPortStreamFailure(
-          watchStream('watchRecovery', input, refused).pipe(Stream.provideContext(context)),
-        ),
+        watchStream('watchRecovery', input, refused).pipe(Stream.provideContext(context)),
     } satisfies WorkspaceServiceShape;
   }),
 );

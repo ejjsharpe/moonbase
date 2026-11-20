@@ -2,7 +2,8 @@ import { Effect } from 'effect';
 import type { GitChange, GitChangeKind } from '@moonbase/contracts/workspace';
 import { GitStatusFormatError } from '@moonbase/contracts/workspace-host-errors';
 
-const unrecognized = (record: string) => new GitStatusFormatError({ record });
+// The record stays on the host: it can name a checkout's paths.
+const unrecognized = () => new GitStatusFormatError();
 
 /** XY pairs Git prints for an unmerged path. */
 const unmergedCodes = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
@@ -35,7 +36,7 @@ export const parseGitStatus = (output: string): Effect.Effect<GitChange[], GitSt
     for (let index = 0; index < records.length; index++) {
       const record = records[index];
       if (!record) continue;
-      if (record.length < 4 || record[2] !== ' ') return Effect.fail(unrecognized(record));
+      if (record.length < 4 || record[2] !== ' ') return Effect.fail(unrecognized());
       const code = record.slice(0, 2),
         path = record.slice(3);
       // A rename or copy record is followed by its source path.
@@ -50,8 +51,7 @@ export const parseGitStatus = (output: string): Effect.Effect<GitChange[], GitSt
       else {
         const staged = readKind(code[0]),
           unstaged = readKind(code[1]);
-        if (staged === undefined || unstaged === undefined)
-          return Effect.fail(unrecognized(record));
+        if (staged === undefined || unstaged === undefined) return Effect.fail(unrecognized());
         if (staged) changes.push({ path, area: 'staged', kind: staged });
         if (unstaged) changes.push({ path, area: 'unstaged', kind: unstaged });
       }

@@ -62,7 +62,7 @@ Errors (D14) and host text (D11):
 - The editor fails with `EditorError` (a `reason`) or the workspace's tagged errors; the chat with `ChatRefusedError`, `DraftStorageError`, `TranscriptReadError`, a host's contract errors or IPC's.
 - `describeEditorFailure`, `describeChatFailure` and `describeApplicationFailure` are the only places a failure becomes shown text, built from fixed text and fields. A host's own words never reach the screen; anything unknown shows fixed text.
 - `EditorAlerts.report` shows a string as it is, so pass a string only for copy Moonbase wrote.
-- Decide on what a failure means through `@moonbase/contracts/error-groups` (the chat's `isChatUnavailable` and `isChatConflict` add its own reasons), never by matching a code or message.
+- Decide on what a failure means through `@moonbase/contracts/error-groups`, never by matching a code or message. The editor's and chat's own errors declare their `group` as contracts' do.
 
 ## Checks
 
