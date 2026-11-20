@@ -121,6 +121,7 @@ export const makeTranscript = (
             if (manifestStale) stale.add(manifestJob);
             // Find while reconnecting, and reads of a live source the snapshot made stale, and of
             // what it changed.
+            // Marked above, before interrupting: a finalizer that runs now finds the marks.
             stopped = [
               ...(stopFind ? search.interruptFindUnsafe(self.id) : []),
               ...jobs.interruptUnsafe(
@@ -197,6 +198,7 @@ export const makeTranscript = (
           const failed = store.update((state) => {
             store.contents.markFailed(failure);
             search.forgetFind();
+            // Marked first, before interrupting: a finalizer that runs now finds the failure.
             stopped = [
               ...search.interruptFindUnsafe(self.id),
               ...jobs.interruptUnsafe(() => true, self.id),

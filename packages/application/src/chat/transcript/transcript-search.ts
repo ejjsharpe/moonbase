@@ -153,21 +153,27 @@ export const makeTranscriptSearch = (
       }),
       cancelFindReveal: Effect.andThen(updateFind({ revealing: false }), stopReveal),
       findTranscript: (query) =>
-        Effect.gen(function* () {
-          // The search it replaces ends before Find shows this one, so it can't write over it.
-          yield* stopFind;
+        Effect.withFiber((self) => {
+          // The search and reveal it replaces stop publishing now, and end before Find shows this
+          // one, so they can't write over it. It waits for them in its own fiber, which failing or a
+          // reconnecting snapshot interrupts, so it never shows over them either.
+          const stopped = interruptFindUnsafe(self.id);
           forgetFind();
-          yield* store.update((state) => ({
-            ...state,
-            find: {
-              ...makeEmptyFindState(),
-              open: true,
-              query,
-              revealing: !!query,
-              status: query ? 'searching' : 'idle',
-            },
-          }));
-          yield* joinRead(yield* FiberHandle.run(searches, search(query)));
+          const replace = Effect.gen(function* () {
+            yield* Fiber.awaitAll(stopped);
+            yield* store.update((state) => ({
+              ...state,
+              find: {
+                ...makeEmptyFindState(),
+                open: true,
+                query,
+                revealing: !!query,
+                status: query ? 'searching' : 'idle',
+              },
+            }));
+            yield* search(query);
+          });
+          return Effect.flatMap(FiberHandle.run(searches, replace), joinRead);
         }),
       moveFind: (direction) =>
         Effect.gen(function* () {
@@ -175,8 +181,10 @@ export const makeTranscriptSearch = (
           if (!store.isCurrent() || !previous.query) return;
           const index = Math.max(0, (previous.activeIndex ?? -1) + (direction === 'next' ? 1 : -1));
           if (index >= previous.count) return;
-          yield* interruptRevealReads;
-          yield* joinRead(yield* FiberHandle.run(reveals, moveToMatch(previous, index)));
+          // The reveal waits for the reads it replaces in its own fiber, which failing or a
+          // reconnecting snapshot interrupts, so it never moves once Find stopped.
+          const reveal = Effect.andThen(interruptRevealReads, moveToMatch(previous, index));
+          yield* joinRead(yield* FiberHandle.run(reveals, reveal));
         }),
       forgetFind,
       interruptFindUnsafe,

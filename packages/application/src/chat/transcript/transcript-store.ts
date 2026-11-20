@@ -70,7 +70,10 @@ export type TranscriptStore = {
    * changed, keeping an unchanged state's identity. `direction` is the page read that grew the
    * records, which evicts from the end it moved away from. `change` runs in one synchronous step
    * with the publish, holding the state, so it may interrupt the reads it makes stale: none resumes
-   * between the two, and one it interrupts publishes how it ended only after this change.
+   * between the two, and one it interrupts publishes how it ended only after this change. A fiber
+   * it interrupts runs its synchronous finalizers inside `change`, seeing the state before it, and
+   * their writes to `contents` land in this change's derive: `change` marks what it makes stale or
+   * failed before it interrupts, so a finalizer finds the mark rather than `loading`.
    */
   readonly update: (
     change?: (state: TranscriptState) => TranscriptState,

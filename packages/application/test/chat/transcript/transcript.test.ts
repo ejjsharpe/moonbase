@@ -632,6 +632,38 @@ test('terminal onError invalidates completed live hydration even when a local wa
   await f.transcript.loadPart(source, chosen);
   assert.equal(f.calls.length, calls);
   assert.equal(f.state.error, revoked.message);
+  // Moving to another match, or searching again, first waits for the reveal's held read to end.
+  // Failing during that wait must stop it: nothing publishes over the failure or reads the chat.
+  for (const operation of ['moveFind', 'findTranscript'] as const) {
+    const g = await transcriptHarness(t, 138, { limits: scaledTranscriptLimits });
+    for (const index of [0, 69, 137])
+      g.sources.get(JSON.stringify(g.entries[index].transcript!.source))!.data[0] = 'needle';
+    await g.transcript.findTranscript('needle');
+    const interrupting = Promise.withResolvers<void>(),
+      interrupted = Promise.withResolvers<void>();
+    g.handlers.set('getChatTranscriptContent', () => never.promise);
+    g.interrupts.set('getChatTranscriptContent', () => {
+      interrupting.resolve();
+      return interrupted.promise;
+    });
+    const revealing = g.transcript.loadManifest(g.state.find.active!.source);
+    await until(() => g.calls.some((call) => call.operation === 'getChatTranscriptContent'));
+    const waiting =
+      operation === 'moveFind'
+        ? g.transcript.moveFind('next')
+        : g.transcript.findTranscript('needle');
+    await interrupting.promise;
+    const before = g.calls.length;
+    const failing = g.transcript.fail(revoked);
+    await until(() => g.state.observation === 'failed');
+    interrupted.resolve();
+    await Promise.all([revealing, waiting, failing]);
+    await tick();
+    assert.equal(g.state.find.error, revoked.message, operation);
+    assert.equal(g.state.find.revealing, false);
+    assert.equal(g.state.find.activeIndex, 0);
+    assert.equal(g.calls.length, before);
+  }
 });
 
 test('history traverses every entry backward and forward across summary eviction', async (t) => {

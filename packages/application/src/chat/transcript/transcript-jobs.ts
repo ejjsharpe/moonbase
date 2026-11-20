@@ -108,9 +108,10 @@ export const makeTranscriptJobs = (
       Effect.gen(function* () {
         if (store.failed) return;
         const history = key === historyJob;
-        // Publishing that the read started is the job's first step. `FiberMap.run` records the job
-        // only once its fiber suspends, but what the publish prompts (a cancel, a newer read) runs
-        // in subscribers' own fibers, after this one yields, so it finds the job in the map.
+        // Publishing that the read started is the job's first step. The publish resumes waiting
+        // subscribers synchronously, before `FiberMap.run` records the job, so nothing reachable
+        // from a synchronous subscriber may interrupt jobs: it would miss this one. Cancels and
+        // newer reads come from callers, which find the job in the map.
         const started = store.update((state) => ({
           ...state,
           error: history ? null : state.error,
