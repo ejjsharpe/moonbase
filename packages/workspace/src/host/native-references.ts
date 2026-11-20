@@ -1,4 +1,4 @@
-import { Cause, Context, Deferred, Effect, Exit, FiberSet, Layer, Scope } from 'effect';
+import { Cause, Context, Deferred, Effect, Exit, FiberSet, Layer, Scope, Semaphore } from 'effect';
 import { randomUUID } from 'node:crypto';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import {
@@ -24,6 +24,9 @@ type NativeReference = {
 };
 type NativeClaim = { token: string; ref: NativeReference };
 
+/** How many native references a host holds at once: unclaimed, claimed or being captured. */
+const nativeReferenceLimit = 256;
+
 /** Fails a release that went wrong as the fixed, safe text a client sees. */
 const asReleaseFailure = Effect.catchCause((cause: Cause.Cause<unknown>) =>
   Cause.hasInterruptsOnly(cause)
@@ -35,27 +38,30 @@ const asReleaseFailure = Effect.catchCause((cause: Cause.Cause<unknown>) =>
  * Native files a picker or drop named, held as single-use references for five minutes, bound to
  * the client and checkout that captured them. An unclaimed reference owns its source's
  * descriptor in a scope of its own; a claimed one hands it to the operation that claimed it.
+ * Each open descriptor holds one of the host's `nativeReferenceLimit` permits until it closes.
  */
 export class References {
   private readonly unclaimed = new Map<string, NativeReference>();
-  private activeNative = 0;
-  private capturing = 0;
   private readonly checkouts: Checkouts['Service'];
   /** Where unclaimed references live; a failed release is reported when it closes. */
   private readonly scope: Scope.Scope;
   private readonly expiries: FiberSet.FiberSet<void, never>;
+  private readonly permits: Semaphore.Semaphore;
   constructor({
     checkouts,
     scope,
     expiries,
+    permits,
   }: {
     checkouts: Checkouts['Service'];
     scope: Scope.Scope;
     expiries: FiberSet.FiberSet<void, never>;
+    permits: Semaphore.Semaphore;
   }) {
     this.checkouts = checkouts;
     this.scope = scope;
     this.expiries = expiries;
+    this.permits = permits;
   }
   getSourceName(token: string) {
     return this.unclaimed.get(token)?.source.source ?? '';
@@ -87,18 +93,11 @@ export class References {
       this.unclaimed.delete(token);
       Deferred.doneUnsafe(ref.claimed, Effect.void);
     }
-    this.activeNative += claims.length;
   }
   /** Hands claimed references' descriptors to the operation running in the current scope. */
   holdClaimedReferences(claims: NativeClaim[]): Effect.Effect<void, never, Scope.Scope> {
     return Effect.gen({ self: this }, function* () {
-      for (const { ref } of claims)
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            this.activeNative--;
-            ref.source.close();
-          }),
-        );
+      for (const { ref } of claims) yield* Effect.addFinalizer(() => this.closeSource(ref.source));
     });
   }
   /** Releases references the client no longer needs; unknown ones are already gone. */
@@ -122,24 +121,35 @@ export class References {
   capture(input: { checkout: CheckoutTarget; clientId: string; paths: string[] }) {
     return Effect.gen({ self: this }, function* () {
       const directory = yield* this.checkouts.directory(input.checkout);
-      if (!(this.unclaimed.size + this.activeNative + this.capturing + input.paths.length <= 256))
-        return yield* new InvalidRequestError({ problem: 'native-limit' });
+      // The capture holds a permit for each path until that path's source opens and holds it.
+      // Taking the permits and installing their return are one uninterruptible step.
+      const held = { permits: input.paths.length };
       const references: string[] = [];
-      this.capturing += input.paths.length;
-      return yield* Effect.gen({ self: this }, function* () {
-        for (const p of input.paths) references.push(yield* this.captureOne(p, input, directory));
-        // A capture cancelled before it hands its references over keeps none of them.
-        yield* cancellationPoint;
-        return references;
-      }).pipe(
-        Effect.onExit((exit) =>
-          Exit.isSuccess(exit)
-            ? Effect.void
-            : Effect.forEach(references, (token) => this.releaseUnclaimed(token), {
-                discard: true,
-              }).pipe(Effect.catchCause((cause) => this.report(cause))),
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.flatMap(Semaphore.takeIfAvailable(this.permits, held.permits), (taken) =>
+          !taken
+            ? Effect.fail(new InvalidRequestError({ problem: 'native-limit' }))
+            : restore(
+                Effect.gen({ self: this }, function* () {
+                  for (const p of input.paths)
+                    references.push(yield* this.captureOne(p, input, directory, held));
+                  // A capture cancelled before it hands its references over keeps none of them.
+                  yield* cancellationPoint;
+                  return references;
+                }),
+              ).pipe(
+                Effect.onExit((exit) =>
+                  Exit.isSuccess(exit)
+                    ? Effect.void
+                    : Effect.forEach(references, (token) => this.releaseUnclaimed(token), {
+                        discard: true,
+                      }).pipe(Effect.catchCause((cause) => this.report(cause))),
+                ),
+                Effect.ensuring(
+                  Effect.suspend(() => Semaphore.release(this.permits, held.permits)),
+                ),
+              ),
         ),
-        Effect.ensuring(Effect.sync(() => (this.capturing -= input.paths.length))),
       );
     });
   }
@@ -147,27 +157,36 @@ export class References {
     p: string,
     input: { checkout: CheckoutTarget; clientId: string },
     directory: Directory,
+    held: { permits: number },
   ) {
     return Effect.gen({ self: this }, function* () {
-      const source = yield* attempt(() => new NativeImport(p, this.checkouts.isReserved));
-      const scope = yield* Scope.fork(this.scope);
-      const token = randomUUID();
-      const claimed = Deferred.makeUnsafe<void>();
-      const entry: NativeReference = {
-        source,
-        clientId: input.clientId,
-        checkout: input.checkout,
-        claimed,
-        scope,
-      };
-      yield* Scope.addFinalizer(
-        scope,
-        Effect.sync(() => {
-          // A claimed reference's descriptor belongs to the operation that claimed it.
-          if (this.unclaimed.get(token) === entry) this.unclaimed.delete(token);
-          else if (Deferred.isDoneUnsafe(claimed)) return;
-          Deferred.doneUnsafe(claimed, Effect.void);
-          source.close();
+      // Opening the source and handing it the capture's permit are one step, so the permit is
+      // returned once: by the capture, or by the source when it closes.
+      const { source, scope, token, claimed, entry } = yield* Effect.uninterruptible(
+        Effect.gen({ self: this }, function* () {
+          const source = yield* attempt(() => new NativeImport(p, this.checkouts.isReserved));
+          const scope = yield* Scope.fork(this.scope);
+          const token = randomUUID();
+          const claimed = Deferred.makeUnsafe<void>();
+          const entry: NativeReference = {
+            source,
+            clientId: input.clientId,
+            checkout: input.checkout,
+            claimed,
+            scope,
+          };
+          yield* Scope.addFinalizer(
+            scope,
+            Effect.suspend(() => {
+              // A claimed reference's descriptor belongs to the operation that claimed it.
+              if (this.unclaimed.get(token) === entry) this.unclaimed.delete(token);
+              else if (Deferred.isDoneUnsafe(claimed)) return Effect.void;
+              Deferred.doneUnsafe(claimed, Effect.void);
+              return this.closeSource(source);
+            }),
+          );
+          held.permits--;
+          return { source, scope, token, claimed, entry };
         }),
       );
       yield* Effect.interruptible(
@@ -190,6 +209,12 @@ export class References {
       );
       return token;
     });
+  }
+  /** Closes a source's descriptor and returns its permit. */
+  private closeSource(source: NativeImport) {
+    return Effect.sync(() => source.close()).pipe(
+      Effect.ensuring(Semaphore.release(this.permits, 1)),
+    );
   }
   /** Closes an unclaimed reference's descriptor; a claimed one's is its operation's to close. */
   private releaseUnclaimed(token: string) {
@@ -215,7 +240,8 @@ export class NativeReferences extends Context.Service<NativeReferences, Referenc
       const checkouts = yield* Checkouts;
       const scope = yield* Effect.scope;
       const expiries = yield* FiberSet.make<void, never>();
-      return new References({ checkouts, scope, expiries });
+      const permits = yield* Semaphore.make(nativeReferenceLimit);
+      return new References({ checkouts, scope, expiries, permits });
     }),
   );
 }

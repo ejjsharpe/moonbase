@@ -84,6 +84,50 @@ test('native release validates the whole known batch, is idempotent, and release
   }
 });
 
+test('a host holds at most 256 native references, and a released, failed or imported one frees its room', async () => {
+  const f = fixture(),
+    { runtime, client } = f.start();
+  try {
+    const checkout = await client.command('openCheckout', { root: f.root });
+    const paths = Array.from({ length: 258 }, (_, index) => join(f.base, `native-${index}`));
+    paths.forEach((path) => writeFileSync(path, 'native bytes'));
+    const api = native(runtime);
+    const capture = (paths: string[]) => api.capture({ checkout, clientId: 'alice', paths });
+    const isLimit = { _tag: 'InvalidRequestError', problem: 'native-limit' };
+    const held = await capture(paths.slice(0, 256));
+    await assert.rejects(capture([paths[256]]), isLimit);
+    // A released reference frees its room.
+    await api.release({ checkout, clientId: 'alice', references: held.splice(0, 2) });
+    await assert.rejects(capture([paths[256], paths[257], paths[0]]), isLimit);
+    // A capture that fails keeps none of its room: neither a source it opened nor one it never did.
+    await assert.rejects(capture([paths[256], join(f.base, 'missing')]));
+    held.push(...(await capture(paths.slice(256, 258))));
+    await assert.rejects(capture([paths[0]]), isLimit);
+    // An import frees its claimed reference's room once it finishes.
+    const imported = held.splice(0, 1);
+    assert.equal(
+      (
+        await client.command('mutate', {
+          checkout,
+          clientId: 'alice',
+          id: 'limit-import',
+          kind: 'import',
+          sources: [],
+          nativeReferences: imported,
+          destination: 'imported',
+        })
+      ).outcome,
+      'completed',
+    );
+    held.push(...(await capture([paths[0]])));
+    await assert.rejects(capture([paths[1]]), isLimit);
+    await api.release({ checkout, clientId: 'alice', references: held });
+  } finally {
+    await runtime.dispose();
+    f.cleanup();
+  }
+});
+
 test('unclaimed references expire in their owning scope and cannot be imported after five minutes', async () => {
   const f = fixture();
   const runtime = ManagedRuntime.make(
