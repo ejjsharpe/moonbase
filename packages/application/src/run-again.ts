@@ -82,22 +82,22 @@ export const makeRunAgain = <K, E = never>(): Effect.Effect<RunAgain<K, E>, neve
           ),
         ),
       // A run interrupted before it started never ran `loop`'s cleanup, so its entry goes here. The
-      // caller cannot be interrupted between removing the run and telling it to stop, or it would
-      // run on beside a successor; only the wait for it to stop is interruptible.
+      // run is told to stop in the same step that removes it, holding the permit, so a successor
+      // cannot start before it is told, and wake it to run on beside it; only the wait for it to
+      // stop is interruptible.
       interrupt: (key) =>
         Effect.uninterruptibleMask((restore) =>
           Effect.flatMap(
-            SynchronizedRef.modify(runs, (map) => [
-              HashMap.get(map, key),
-              HashMap.remove(map, key),
-            ]),
+            SynchronizedRef.modifyEffect(runs, (map) =>
+              Effect.withFiber((self) => {
+                const running = HashMap.get(map, key);
+                if (Option.isSome(running)) running.value.fiber.interruptUnsafe(self.id);
+                return Effect.succeed([running, HashMap.remove(map, key)] as const);
+              }),
+            ),
             Option.match({
               onNone: () => Effect.void,
-              onSome: ({ fiber }) =>
-                Effect.withFiber((self) => {
-                  fiber.interruptUnsafe(self.id);
-                  return restore(Effect.asVoid(Fiber.await(fiber)));
-                }),
+              onSome: ({ fiber }) => restore(Effect.asVoid(Fiber.await(fiber))),
             }),
           ),
         ),

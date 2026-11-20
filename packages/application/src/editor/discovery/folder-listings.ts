@@ -5,6 +5,7 @@ import {
   Equal,
   Fiber,
   FiberMap,
+  FiberSet,
   Hash,
   Ref,
   SubscriptionRef,
@@ -36,11 +37,18 @@ class FolderKey implements Equal.Equal {
   }
 }
 
-/** One listing read of a folder, which later callers join until it is listed or a change. */
-type ListingRead = {
+/** A read's request, and the fiber that shows its listing unless a newer read began first. */
+type ReadBegun = {
   readonly listed: Fiber.Fiber<DirectoryListing, WorkspaceError>;
-  /** Shows the listing and classifies it, unless a newer read of the folder began first. */
   readonly shown: Fiber.Fiber<void>;
+};
+
+/**
+ * One listing read of a folder, which later callers join until it is listed or a change. The cache
+ * holds it before it begins: only the read itself shows its listing or drops it from the cache.
+ */
+type ListingRead = {
+  readonly begun: Deferred.Deferred<ReadBegun>;
   /** Whether a caller reports the read's failures: one that joins a quiet read makes it loud. */
   readonly loud: Ref.Ref<boolean>;
   /** Reports the listing's failure, once however many callers report it. */
@@ -91,54 +99,65 @@ export const makeFolderListings = (options: {
         yield* classification.classify(folder, scope, listing, shown, loud);
       }).pipe(Effect.ignore);
 
+    /** Reads beginning, each once the cache holds it. */
+    const beginning = yield* FiberSet.make<void>();
+
+    /**
+     * Begins a cached read. The read claims the folder's listing before anything can suspend it,
+     * so a read admitted after it (a change dropped it from the cache) claims it after, and shows.
+     * Cancelling the last classification may read the folder again: that read finds this one cached
+     * and joins it, as its request is not yet asked.
+     */
+    const beginRead = (folder: FolderKey, read: ListingRead) =>
+      Effect.gen(function* () {
+        const { checkout, path, key } = folder;
+        const started = yield* Deferred.make<{
+          readonly scope: Scope.Scope;
+          readonly listed: Fiber.Fiber<DirectoryListing, WorkspaceError>;
+        }>();
+        const shown = yield* FiberMap.run(
+          showing,
+          key,
+          Effect.flatMap(Deferred.await(started), ({ scope, listed }) =>
+            showListing(folder, scope, listed, read.loud),
+          ).pipe(
+            // The read's end drops it, never a later read, from the cache: callers read again.
+            Effect.ensuring(Cache.invalidateWhen(reads, folder, (cached) => cached === read)),
+          ),
+          { startImmediately: false },
+        );
+        const scope = yield* checkoutScope(checkout);
+        yield* classification.cancel(key);
+        const listed = yield* Effect.forkIn(
+          workspace.listDirectory({
+            checkout,
+            path,
+            includeIgnoredStatus: false,
+          }),
+          scope,
+          { startImmediately: false },
+        );
+        yield* Deferred.succeed(started, { scope, listed });
+        yield* Deferred.succeed(read.begun, { listed, shown });
+      }).pipe(Effect.uninterruptible);
+
     const reads: Cache.Cache<FolderKey, ListingRead> = yield* Cache.make({
       capacity: Number.POSITIVE_INFINITY,
+      // Only allocates the read: it begins once cached, so nothing it starts can replace the entry.
       lookup: (folder: FolderKey) =>
-        Effect.uninterruptible(
-          Effect.gen(function* () {
-            const { checkout, path, key } = folder;
-            // The read claims the folder's listing before anything can suspend it: a read admitted
-            // after this one, once a change drops it from the cache, claims it after, so shows.
-            const started = yield* Deferred.make<{
-              readonly scope: Scope.Scope;
-              readonly listed: Fiber.Fiber<DirectoryListing, WorkspaceError>;
-            }>();
-            const loud = yield* Ref.make(folder.loud);
-            // Started once the read is cached, so its end can drop it from the cache: callers
-            // after that read again.
-            const shown = yield* FiberMap.run(
-              showing,
-              key,
-              Effect.flatMap(Deferred.await(started), ({ scope, listed }) =>
-                showListing(folder, scope, listed, loud),
-              ).pipe(
-                Effect.ensuring(
-                  Effect.withFiber((self) =>
-                    Cache.invalidateWhen(reads, folder, (read) => read.shown === self),
-                  ),
-                ),
-              ),
-              { startImmediately: false },
-            );
-            const scope = yield* checkoutScope(checkout);
-            yield* classification.cancel(key);
-            // Asked once the read is cached, so a change the request causes drops this read.
-            const listed = yield* Effect.forkIn(
-              workspace.listDirectory({
-                checkout,
-                path,
-                includeIgnoredStatus: false,
-              }),
-              scope,
-              { startImmediately: false },
-            );
-            yield* Deferred.succeed(started, { scope, listed });
-            const reportFailure = yield* Effect.cached(
-              Effect.catch(Fiber.join(listed), report).pipe(Effect.ignoreCause),
-            );
-            return { listed, shown, loud, reportFailure } satisfies ListingRead;
-          }),
-        ),
+        Effect.gen(function* () {
+          const begun = yield* Deferred.make<ReadBegun>();
+          const loud = yield* Ref.make(folder.loud);
+          const reportFailure = yield* Effect.cached(
+            Deferred.await(begun).pipe(
+              Effect.flatMap(({ listed }) => Effect.catch(Fiber.join(listed), report)),
+              Effect.ignoreCause,
+            ),
+          );
+          const read = { begun, loud, reportFailure } satisfies ListingRead;
+          yield* FiberSet.run(beginning, beginRead(folder, read), { startImmediately: false });
+          return read;
+        }),
     });
 
     return {
@@ -147,8 +166,9 @@ export const makeFolderListings = (options: {
         Effect.gen(function* () {
           const read = yield* Cache.get(reads, new FolderKey(checkout, path, loud));
           if (loud) yield* Ref.set(read.loud, true);
-          const listed = yield* Fiber.await(read.listed);
-          yield* Fiber.await(read.shown);
+          const begun = yield* Deferred.await(read.begun);
+          const listed = yield* Fiber.await(begun.listed);
+          yield* Fiber.await(begun.shown);
           if (loud) yield* read.reportFailure;
           return yield* listed;
         }),

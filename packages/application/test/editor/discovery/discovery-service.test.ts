@@ -208,6 +208,73 @@ describe('the discovery service on its own', () => {
     }
   });
 
+  test('a read started as a classification is cancelled leaves the folder to read again', async () => {
+    const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'one' } }]);
+    const runtime = ManagedRuntime.make(memory.layer);
+    const base = await runtime.runPromise(Effect.service(WorkspaceService));
+    const nested = await runtime.runPromise(
+      Deferred.make<Fiber.Fiber<DirectoryListing, unknown>>(),
+    );
+    let requests = 0;
+    let reread: Effect.Effect<DirectoryListing, unknown> | undefined;
+    // Git never answers; the first classification cancelled outright reads the folder again.
+    const workspace = Layer.succeed(WorkspaceService, {
+      ...base,
+      listDirectory: () => {
+        requests += 1;
+        return Effect.succeed({
+          entries: [{ path: `reply-${requests}.ts`, directory: false }],
+          partial: false,
+        });
+      },
+      getIgnoredPaths: () =>
+        Effect.never.pipe(
+          Effect.onInterrupt(() =>
+            Effect.suspend(() => {
+              const again = reread;
+              reread = undefined;
+              return again
+                ? Effect.flatMap(Effect.forkDetach(again, { startImmediately: true }), (fiber) =>
+                    Deferred.succeed(nested, fiber),
+                  )
+                : Effect.void;
+            }),
+          ),
+        ),
+    });
+    const editor = ManagedRuntime.make(
+      Layer.provideMerge(editorLayer({ clientId: 'c' }), workspace),
+    );
+    try {
+      await editor.runPromise(
+        Effect.gen(function* () {
+          yield* (yield* EditorLoader).load;
+          const opened = yield* (yield* EditorCheckouts).openCheckout(checkout.root);
+          const discovery = yield* EditorDiscovery;
+          // Opening listed the root once; the second read keeps that one's classification running,
+          // so the third cancels the second's outright, which reads the folder again.
+          yield* discovery.list(opened, '');
+          reread = discovery.list(opened, '');
+          const third = yield* discovery.list(opened, '');
+          const replacement = yield* Fiber.join(yield* Deferred.await(nested));
+          const before = requests;
+          const fourth = yield* discovery.list(opened, '');
+          assert.equal(requests, before + 1, 'the folder was read again');
+          const shown = (yield* discovery.get).listings;
+          assert.deepEqual(
+            Object.values(shown).flatMap((listing) => listing.entries.map((entry) => entry.path)),
+            fourth.entries.map((entry) => entry.path),
+          );
+          assert.notDeepEqual(fourth, replacement);
+          assert.notDeepEqual(fourth, third);
+        }),
+      );
+    } finally {
+      await editor.dispose();
+      await runtime.dispose();
+    }
+  });
+
   test('a watch that fails while its replacement waits on the refresh cannot leave the checkout lost', async () => {
     const memory = fauxWorkspace([{ checkout, files: { 'a.ts': 'one' } }]);
     const runtime = ManagedRuntime.make(memory.layer);
