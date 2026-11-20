@@ -129,7 +129,7 @@ export function useFileDrop({
         ),
       );
       if (!references.length) return;
-      const recovery = actions.getSnapshot().recovery;
+      const recovery = actions.read(actions.atoms.views.checkouts);
       if (
         !recovery.openCheckoutIds.includes(captured.checkoutId) ||
         !recovery.checkouts.some((target) => checkoutKey(target) === checkoutIdentity)

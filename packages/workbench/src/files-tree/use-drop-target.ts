@@ -25,7 +25,7 @@ export function useDropTarget({
   /** Expands a folder that a drag has hovered over for a moment. */
   function expandForDrag(path: string) {
     try {
-      const current = actions.getSnapshot().recovery.views.get(checkout.checkoutId)?.tree;
+      const current = actions.read(actions.atoms.views.checkoutTree(checkout.checkoutId));
       if (!current || current.expanded.includes(path)) return;
       actions.tree(checkout, { expanded: [...current.expanded, path] });
       actions.start(actions.list(checkout, path));

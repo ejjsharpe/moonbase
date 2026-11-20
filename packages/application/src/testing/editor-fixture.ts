@@ -1,4 +1,6 @@
 import { TestClock } from 'effect/testing';
+import * as Atom from 'effect/reactivity/Atom';
+import * as AtomRegistry from 'effect/reactivity/AtomRegistry';
 import {
   Cause,
   Context,
@@ -34,14 +36,12 @@ import type {
 } from '@moonbase/contracts/workspace';
 import {
   EditorAlerts,
-  EditorBuffers,
   EditorCheckouts,
   EditorDiscovery,
   EditorError,
   EditorLoader,
   EditorLookup,
   EditorMutations,
-  EditorOperations,
   EditorPreservation,
   EditorSaves,
   EditorSession,
@@ -49,16 +49,14 @@ import {
   EditorTextSearch,
   EditorTree,
   EditorViews,
-  RecoveryOutbox,
   RecoverySync,
   editorLayer,
   fileKey,
+  makeEditorAtoms,
   sameCheckout,
-  toEditorSnapshot,
   type CloseChoice,
   type EditorBuffer,
   type EditorOptions,
-  type EditorParts,
   type EditorServices,
   type EditorSnapshot,
   type MutationAction,
@@ -95,9 +93,6 @@ export type WorkspaceClient = {
     onError: (error: WorkspaceError) => void,
   ): () => Promise<void>;
 };
-
-/** A piece of the editor snapshot: its value now, and its changes from it. */
-type SnapshotSource = { readonly read: () => unknown; readonly changes: Stream.Stream<unknown> };
 
 /** A client's failure as the workspace's: its own error, else the fixed unavailable one. */
 const asWorkspaceError = (error: unknown): WorkspaceError =>
@@ -250,47 +245,11 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     recovery = get(RecoverySync),
     alerts = get(EditorAlerts),
     views = get(EditorViews);
-  const refs = [
-    session.state,
-    alerts.alerts,
-    views.state,
-    get(EditorBuffers).state,
-    get(EditorDiscovery).state,
-    get(EditorOperations).state,
-    get(RecoveryOutbox).state,
-    mutations.state,
-  ].map((ref) => ({
-    read: () => SubscriptionRef.getUnsafe(ref as SubscriptionRef.SubscriptionRef<unknown>),
-    changes: SubscriptionRef.changes(ref as SubscriptionRef.SubscriptionRef<unknown>),
-  }));
-  const sources: readonly SnapshotSource[] = [
-    ...refs,
-    ...[mutations.replacePrompt, preservation.closePrompt].map((shown) => ({
-      read: () => Effect.runSync(shown.get as Effect.Effect<unknown>),
-      changes: shown.changes as Stream.Stream<unknown>,
-    })),
-  ];
-  let parts: unknown[] | undefined, snapshot: EditorSnapshot | undefined;
-  const getSnapshot = (): EditorSnapshot => {
-    const next = sources.map((source) => source.read());
-    if (!parts || next.some((part, index) => part !== parts![index])) {
-      parts = next;
-      const [s, a, v, b, d, o, x, m, r, c] = next;
-      snapshot = toEditorSnapshot({
-        session: s,
-        alerts: a,
-        views: v,
-        buffers: b,
-        discovery: d,
-        operations: o,
-        outbox: x,
-        mutation: m,
-        replacePrompt: r,
-        closePrompt: c,
-      } as EditorParts);
-    }
-    return snapshot!;
-  };
+  // Read as a view reads it: through the editor's atoms, kept mounted in the driver's registry.
+  const registry = AtomRegistry.make();
+  const atoms = makeEditorAtoms(context as Context.Context<EditorServices>);
+  const unmount = registry.mount(atoms.snapshot);
+  const getSnapshot = (): EditorSnapshot => registry.get(atoms.snapshot);
   // Actions run with the editor's services but outside its runtime's own fibers, as a view's do:
   // closing the editor ends the work it owns, not the caller waiting on it.
   const services = context as Context.Context<EditorServices>;
@@ -304,15 +263,6 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
   ): Promise<A> => unwrap(await Effect.runPromiseExitWith(services)(effect, { signal }), cancelled);
   const now = <A, E>(effect: Effect.Effect<A, E, EditorServices>): A =>
     unwrap(Effect.runSyncExitWith(services)(effect), cancelled);
-  /** Calls `listener` after each change to `watched`, from now until unsubscribed. */
-  const watchChanges = (watched: readonly Stream.Stream<unknown>[], listener: () => void) => {
-    // Each fiber subscribes as it starts, before this returns, so no change after this call is
-    // missed. Each stream replays the value it started from first: that is no change.
-    const fibers = watched.map((changes) =>
-      Effect.runFork(Stream.runForEach(Stream.drop(changes, 1), () => Effect.sync(listener))),
-    );
-    return () => void Effect.runFork(Fiber.interruptAll(fibers));
-  };
   const handles = new Set<Closeable>();
   /** A popup's query, as a lookup or a search. */
   const makeQuery = <S, Q extends { state: SubscriptionRef.SubscriptionRef<S> }>(
@@ -320,12 +270,14 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
   ) => {
     const scope = now(Scope.make());
     const query = now(Scope.provide(scope)(make));
+    // Mounted while the handle lives, as a view showing the query keeps it.
+    const state = Atom.subscriptionRef(query.state),
+      unmountState = registry.mount(state);
     let completion: Promise<void> | undefined;
     const handle = {
       query,
-      getSnapshot: (): S => SubscriptionRef.getUnsafe(query.state),
-      subscribe: (listener: () => void) =>
-        watchChanges([SubscriptionRef.changes(query.state)], listener),
+      getSnapshot: (): S => registry.get(state),
+      subscribe: (listener: () => void) => registry.subscribe(state, listener),
       /** Opens a result through the query, which a newer query or open interrupts. */
       open: (target: FileTarget, options?: OpenOptions) =>
         run(
@@ -339,6 +291,7 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
         now((query as unknown as { message: (m: string) => Effect.Effect<void> }).message(message)),
       dispose: () => {
         handles.delete(handle);
+        unmountState();
         return (completion ??= run(Scope.close(scope, Exit.void)));
       },
       stop: () => void handle.dispose(),
@@ -367,11 +320,8 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
     clientId: session.clientId,
     instanceId: crypto.randomUUID(),
     getSnapshot,
-    subscribe: (listener: () => void) =>
-      watchChanges(
-        sources.map((source) => source.changes),
-        listener,
-      ),
+    /** Calls `listener` after each change to the editor's state, from now until unsubscribed. */
+    subscribe: (listener: () => void) => registry.subscribe(atoms.snapshot, listener),
     report: (error: unknown) => now(alerts.report(error)),
     clearErrors: () => now(alerts.clear),
     /** Composition fences admissions while it prepares Quit. */
@@ -477,6 +427,8 @@ export async function acquireEditorDriver(options: EditorDriverOptions) {
         // oxlint-disable-next-line no-useless-spread -- Disposing removes each handle.
         for (const handle of [...handles]) await handle.dispose().catch(() => {});
         await runtime.dispose();
+        // The registry stays readable: a test reads what the closed editor last published.
+        unmount();
       })()),
   };
   return driver;

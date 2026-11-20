@@ -4,12 +4,7 @@ import { Tabs } from '@base-ui/react/tabs';
 import { AnimatePresence, useReducedMotion } from 'motion/react';
 import { workbench } from '@moonbase/ui/workbench';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
-import {
-  checkoutKey,
-  fileKey,
-  type EditorSnapshot,
-  type CheckoutView,
-} from '@moonbase/application/editor';
+import { checkoutKey, fileKey, type CheckoutTabs } from '@moonbase/application/editor';
 import type { FocusReturn } from '../focus-return.ts';
 import { EditorTab, type TabDrag } from './editor-tab.tsx';
 import type { EditorActions } from '../editor-actions.ts';
@@ -28,7 +23,6 @@ export type EditorTabsHandle = {
 export function EditorTabs({
   ref,
   actions,
-  state,
   checkout,
   view,
   git,
@@ -37,9 +31,8 @@ export function EditorTabs({
 }: {
   ref?: Ref<EditorTabsHandle>;
   actions: EditorActions;
-  state: EditorSnapshot;
   checkout: CheckoutTarget;
-  view: CheckoutView;
+  view: CheckoutTabs;
   git: boolean;
   closeFiles: (paths: string[]) => Effect.Effect<boolean, unknown, WorkbenchServices>;
   withFocus: FocusReturn['withFocus'];
@@ -80,7 +73,6 @@ export function EditorTabs({
           <EditorTab
             key={fileKey({ checkout, path })}
             actions={actions}
-            state={state}
             checkout={checkout}
             view={view}
             path={path}

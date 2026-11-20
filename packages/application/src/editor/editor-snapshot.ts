@@ -6,7 +6,7 @@ import type {
 } from '@moonbase/contracts/workspace';
 import type { SessionState } from './session/session-service.ts';
 import type { EditorRecovery } from './recovery/recovery-layout.ts';
-import type { OutboxState } from './recovery/recovery-outbox.ts';
+import { hasEditFailed, type OutboxState } from './recovery/recovery-outbox.ts';
 import type { ViewsState } from './views/views.ts';
 import type { BuffersState, EditorBuffer } from './buffers/buffers.ts';
 import type { DiscoveryState } from './discovery/discovery.ts';
@@ -63,7 +63,7 @@ export const toEditorSnapshot = (parts: EditorParts): EditorSnapshot => ({
   comparisons: parts.discovery.comparisons,
   listings: parts.discovery.listings,
   git: parts.discovery.git,
-  recoveryFailed: parts.outbox.failure !== undefined,
+  recoveryFailed: hasEditFailed(parts.outbox),
   errors: parts.alerts,
   operations: listUnsettled(parts.operations),
   mutating: parts.mutation.mutating,

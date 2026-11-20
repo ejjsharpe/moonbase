@@ -32,6 +32,14 @@ export const emptyDiscovery: DiscoveryState = {
 
 export const listingKey = (checkout: CheckoutTarget, path: string) =>
   JSON.stringify([checkoutKey(checkout), path]);
+/** The listings of the checkout with this checkout key, by `listingKey`. */
+export function pickCheckoutListings(
+  listings: DiscoveryState['listings'],
+  checkout: string,
+): DiscoveryState['listings'] {
+  const prefix = JSON.stringify([checkout]).slice(0, -1) + ',';
+  return Object.fromEntries(Object.entries(listings).filter(([key]) => key.startsWith(prefix)));
+}
 /** Whether a listing, comparison or attempt key belongs to the checkout. */
 export const isKeyOf = (key: string, checkout: CheckoutTarget) =>
   JSON.parse(key)[0] === checkoutKey(checkout);

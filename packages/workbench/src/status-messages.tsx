@@ -1,7 +1,7 @@
 import * as stylex from '@stylexjs/stylex';
 import { Button } from '@base-ui/react/button';
 import { controls } from '@moonbase/ui/controls';
-import type { EditorSnapshot } from '@moonbase/application/editor';
+import { useAtomValue } from '@effect/atom-react';
 import type { EditorActions } from './editor-actions.ts';
 import { useEditorTask } from './use-editor-task.ts';
 
@@ -11,25 +11,26 @@ import { useEditorTask } from './use-editor-task.ts';
  */
 export function StatusMessages({
   actions,
-  state,
   retryRecovery,
 }: {
   actions: EditorActions;
-  state: EditorSnapshot;
   retryRecovery: () => void;
 }) {
   const run = useEditorTask(actions);
+  const errors = useAtomValue(actions.atoms.alerts),
+    recoveryFailed = useAtomValue(actions.atoms.recoveryFailed),
+    operations = useAtomValue(actions.atoms.operations);
   return (
     <>
-      {!!state.errors.length && (
+      {!!errors.length && (
         <div role="alert" {...stylex.props(controls.status, controls.alert)}>
-          {state.errors.at(-1)}{' '}
+          {errors.at(-1)}{' '}
           <Button {...stylex.props(controls.button)} onClick={() => actions.clearErrors()}>
             Dismiss error
           </Button>
         </div>
       )}
-      {state.recoveryFailed && (
+      {recoveryFailed && (
         <p role="status" {...stylex.props(controls.status)}>
           Recent edits are not yet kept for recovery. They stay open here.
           <Button {...stylex.props(controls.button)} onClick={retryRecovery}>
@@ -37,7 +38,7 @@ export function StatusMessages({
           </Button>
         </p>
       )}
-      {state.operations.map((operation) => (
+      {operations.map((operation) => (
         <p
           key={JSON.stringify([operation.clientId, operation.id])}
           role="status"

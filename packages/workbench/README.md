@@ -36,6 +36,7 @@ The app's platform capabilities (`selectNativeImports`, `selectClipboardImports`
 - The tree's Cut and Copy use the workbench's own file clipboard; the OS clipboard only gets relative paths as text through `copyPaths`.
 - Focus returns through element refs and component handles, never by querying labels.
 - Unmounting releases presentation resources, never the editor.
+- Each view reads the editor atoms for what it shows (`actions.atoms`), never the whole snapshot, and reads state it acts on with `actions.read` at the time. Typing re-renders no tab, tree or workbench root: Monaco's models follow the buffers outside render (`src/monaco-models.ts`).
 
 ## Checks
 

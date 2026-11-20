@@ -29,8 +29,7 @@ export function WorktreeSwitcher({
   checkout: CheckoutTarget;
 }) {
   const run = useEditorTask(actions);
-  const initializing =
-    useAtomValue(actions.editor.atoms.session).initializing === checkout.checkoutId;
+  const initializing = useAtomValue(actions.atoms.session.initializing) === checkout.checkoutId;
   const name = checkoutName(checkout);
   if (checkout.vcs === 'none')
     return (

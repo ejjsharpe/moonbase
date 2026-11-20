@@ -4,6 +4,7 @@ import { Button } from '@base-ui/react/button';
 import { controls } from '@moonbase/ui/controls';
 import { workbench } from '@moonbase/ui/workbench';
 import type { CheckoutTarget } from '@moonbase/contracts/workspace';
+import { useAtomValue } from '@effect/atom-react';
 import { isCommandKey } from '../shortcuts.ts';
 import { listExplorerActions, type ExplorerActionContext } from './explorer-actions.ts';
 import { ExplorerMenu } from './explorer-menu.tsx';
@@ -37,7 +38,7 @@ export function Explorer({
   actions: EditorActions;
   checkout: CheckoutTarget;
   /** What the "…" menu's actions act on and through. */
-  menu: Omit<ExplorerActionContext, 'run'>;
+  menu: Omit<ExplorerActionContext, 'run' | 'hideIgnoredFiles'>;
   git: boolean;
   panel: ExplorerPanel;
   onPanel: (panel: ExplorerPanel) => void;
@@ -47,6 +48,7 @@ export function Explorer({
   children: ReactNode;
 }) {
   const run = useEditorTask(actions);
+  const tree = useAtomValue(actions.atoms.views.checkoutTree(checkout.checkoutId));
   return (
     <div
       ref={ref}
@@ -59,7 +61,11 @@ export function Explorer({
         <div {...stylex.props(workbench.explorerHeader)}>
           <WorktreeSwitcher actions={actions} checkout={checkout} />
           <ExplorerMenu
-            actions={listExplorerActions({ ...menu, run })}
+            actions={listExplorerActions({
+              ...menu,
+              hideIgnoredFiles: !!tree?.hideIgnoredFiles,
+              run,
+            })}
             triggerRef={actionsButtonRef}
           />
         </div>

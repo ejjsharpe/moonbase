@@ -1,6 +1,6 @@
 import { useState, type KeyboardEvent } from 'react';
 import type { CheckoutTarget, FileTarget } from '@moonbase/contracts/workspace';
-import { checkoutKey, type EditorSnapshot, type CheckoutView } from '@moonbase/application/editor';
+import { checkoutKey, type CheckoutTabs } from '@moonbase/application/editor';
 import { cycleRecentTabs, type RecentTabs } from './editor-tabs/recent-tabs.tsx';
 import type { ExplorerPanel } from './explorer/explorer.tsx';
 import type { FocusOrigin, FocusReturn } from './focus-return.ts';
@@ -18,7 +18,7 @@ import type { WorkbenchServices } from './workbench-editor.ts';
  */
 export function useWorkbenchKeys({
   actions,
-  state,
+  preserving,
   checkout,
   view,
   target,
@@ -29,9 +29,9 @@ export function useWorkbenchKeys({
   closeFiles,
 }: {
   actions: EditorActions;
-  state: EditorSnapshot;
+  preserving: boolean;
   checkout: CheckoutTarget | undefined;
-  view: CheckoutView | undefined;
+  view: CheckoutTabs | undefined;
   target: FileTarget | undefined;
   focus: FocusReturn;
   findOrigin: (element: HTMLElement) => FocusOrigin;
@@ -51,7 +51,7 @@ export function useWorkbenchKeys({
         !element.closest('.monaco-editor'))
     )
       return;
-    if (!checkout || !view || state.preserving) return;
+    if (!checkout || !view || preserving) return;
     const key = event.key.toLowerCase(),
       command = event.metaKey || event.ctrlKey,
       picking = pickerMode(event, pickerCommand(event));
@@ -92,8 +92,9 @@ export function useWorkbenchKeys({
       take();
       const next = cycleRecentTabs(recent, {
         active: view.active,
-        recentFiles: state.recovery.recentFiles
-          .filter((file) => checkoutKey(file.checkout) === checkoutKey(checkout))
+        recentFiles: actions
+          .read(actions.atoms.views.recovery)
+          .recentFiles.filter((file) => checkoutKey(file.checkout) === checkoutKey(checkout))
           .map((file) => file.path),
         openFiles: view.openFiles,
         back: event.shiftKey,

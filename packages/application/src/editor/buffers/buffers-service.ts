@@ -8,6 +8,7 @@ import { fileKey, sameCheckout } from '../recovery/recovery-references.ts';
 import { EditorViews } from '../views/views-service.ts';
 import {
   draftBuffers,
+  settleBuffers,
   emptyBuffers,
   findBufferById,
   isDirty,
@@ -21,7 +22,10 @@ import { findFreePath } from './free-path.ts';
 export type EditorBuffersShape = {
   readonly state: SubscriptionRef.SubscriptionRef<BuffersState>;
   readonly get: Effect.Effect<BuffersState>;
-  /** Changes a copy of the buffers: `f` may change the copy it is given, which replaces them. */
+  /**
+   * Changes a draft of the buffers, which then replaces them: `f` may change the maps and each
+   * buffer or tab it reads from them.
+   */
   readonly modify: <A>(f: (draft: BuffersDraft) => A) => Effect.Effect<A>;
   readonly find: (target: FileTarget) => Effect.Effect<EditorBuffer | undefined>;
   /** Changes the buffer with this identity, wherever a move has taken it. */
@@ -65,7 +69,7 @@ export class EditorBuffers extends Context.Service<EditorBuffers, EditorBuffersS
         SubscriptionRef.modify(state, (current) => {
           const draft = draftBuffers(current);
           const result = f(draft);
-          return [result, draft] as const;
+          return [result, settleBuffers(current, draft)] as const;
         });
       const forgetComparisons = (keys: readonly string[]) =>
         discovery.update((s) => {
@@ -138,9 +142,13 @@ export class EditorBuffers extends Context.Service<EditorBuffers, EditorBuffersS
         modify,
         find: (target) => Effect.map(get, (s) => s.buffers.get(fileKey(target))),
         updateBuffer: (id, f) =>
-          modify((d) => {
-            const found = findBufferById(d, id);
-            if (found) f(found[1]);
+          SubscriptionRef.update(state, (current) => {
+            // Found in the state itself, so the draft copies only this buffer.
+            const found = findBufferById(current, id);
+            if (!found) return current;
+            const draft = draftBuffers(current);
+            f(draft.buffers.get(found[0])!);
+            return settleBuffers(current, draft);
           }),
         sendDraft: (target) =>
           Effect.gen(function* () {

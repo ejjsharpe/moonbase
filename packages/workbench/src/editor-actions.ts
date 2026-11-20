@@ -1,5 +1,6 @@
 import { useContext, useMemo } from 'react';
 import { Context, type Effect } from 'effect';
+import type * as Atom from 'effect/reactivity/Atom';
 import type * as AtomRegistry from 'effect/reactivity/AtomRegistry';
 import { RegistryContext } from '@effect/atom-react';
 import type {
@@ -53,12 +54,24 @@ export function makeEditorActions(editor: WorkbenchEditor, registry: AtomRegistr
    * failure.
    */
   const start = (work: WorkbenchWork) => registry.set(editor.work, work);
-  const getSnapshot = (): EditorSnapshot => registry.get(atoms.snapshot);
+  /** An atom's value now, for a decision made as the user acts rather than while rendering. */
+  const read = <A>(atom: Atom.Atom<A>): A => registry.get(atom);
   return {
     editor,
     /** This editor's identity, which drags and Monaco models carry. */
     clientId: session.clientId,
-    getSnapshot,
+    /** The editor's atoms, which views read the pieces they show from. */
+    atoms,
+    read,
+    /** Calls `listener` after each change to an atom, until the returned function is called. */
+    subscribe: <A>(atom: Atom.Atom<A>, listener: () => void) => {
+      const stop = registry.subscribe(atom, listener);
+      // Reading it builds it, so the changes that follow reach the listener.
+      registry.get(atom);
+      return stop;
+    },
+    /** The whole editor at once, for demos and specs; views read the atoms they need. */
+    getSnapshot: (): EditorSnapshot => registry.get(atoms.snapshot),
     /** The app's platform capabilities, which views offer only when supplied. */
     platform: editor.platform,
     start,
@@ -70,8 +83,7 @@ export function makeEditorActions(editor: WorkbenchEditor, registry: AtomRegistr
     /** Shows a failure, or Moonbase's own note, in the editor's alerts. */
     report: (error: unknown) => start(alerts.report(error)),
     clearErrors: () => start(alerts.clear),
-    buffer: (target: FileTarget) =>
-      getSnapshot().buffers.find((buffer) => fileKey(buffer.target) === fileKey(target)),
+    buffer: (target: FileTarget) => read(atoms.buffers.state).buffers.get(fileKey(target)),
     open: (target: FileTarget, options?: OpenOptions) => tabs.open(target, options),
     navigate: (checkout: CheckoutTarget, direction: 1 | -1) => tabs.navigate(checkout, direction),
     /** Sends typed text; fails when the editor refuses it, so the view can restore its text. */
@@ -111,10 +123,10 @@ export function makeEditorActions(editor: WorkbenchEditor, registry: AtomRegistr
     admitsMutation: (action: MutationAction) =>
       admitsMutation(
         {
-          ...registry.get(atoms.session),
+          ...read(atoms.session.state),
           prompting: false,
-          mutating: registry.get(atoms.mutation).mutating,
-          recovery: registry.get(atoms.views).recovery,
+          mutating: read(atoms.mutating),
+          recovery: read(atoms.views.recovery),
         },
         action,
       ),

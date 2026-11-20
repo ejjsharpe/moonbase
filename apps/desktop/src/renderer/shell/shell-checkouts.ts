@@ -10,7 +10,11 @@ export const isMainCheckout = (checkout: CheckoutTarget) =>
  * one, every one as a folder a new local chat may start in (the editor approved each), and the
  * closed projects to reopen, newest first.
  */
-export function readShellCheckouts(recovery: EditorRecovery | undefined) {
+export function readShellCheckouts(
+  recovery:
+    | Pick<EditorRecovery, 'checkouts' | 'openCheckoutIds' | 'selectedCheckoutId'>
+    | undefined,
+) {
   const open =
     recovery?.openCheckoutIds
       .map((id) => recovery.checkouts.find((checkout) => checkout.checkoutId === id))

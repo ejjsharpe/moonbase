@@ -82,7 +82,7 @@ export function useFocusReturn({
   }, [request, blocked]);
   /** Counts newer input, which cancels a pending return; a close prompt's answer doesn't count. */
   function captureInteraction() {
-    if (!actions.getSnapshot().closePrompt) interaction.current++;
+    if (!actions.read(actions.atoms.closePrompt)) interaction.current++;
   }
   useEffect(() => {
     const document = root.current?.ownerDocument;
@@ -90,7 +90,7 @@ export function useFocusReturn({
       if (
         event.key === 'Tab' &&
         !root.current?.contains(event.target as Node) &&
-        !actions.getSnapshot().closePrompt
+        !actions.read(actions.atoms.closePrompt)
       )
         interaction.current++;
     };
@@ -109,7 +109,7 @@ export function useFocusReturn({
     const from = document.activeElement;
     const started = interaction.current;
     const focus = Effect.sync(() => {
-      const next = actions.getSnapshot().recovery;
+      const next = actions.read(actions.atoms.views.recovery);
       if (checkout && next.openCheckoutIds.includes(checkout.checkoutId))
         setRequest({
           checkout,

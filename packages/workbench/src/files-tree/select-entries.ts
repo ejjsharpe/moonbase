@@ -12,7 +12,7 @@ export function selectEntries(
   checkout: CheckoutTarget,
   paths: readonly string[],
 ) {
-  const tree = actions.getSnapshot().recovery.views.get(checkout.checkoutId)?.tree;
+  const tree = actions.read(actions.atoms.views.checkoutTree(checkout.checkoutId));
   if (!tree || !paths.length) return;
   const opening = [
     ...new Set(paths.flatMap((path) => listFoldersToExpand(getParentPath(path)))),

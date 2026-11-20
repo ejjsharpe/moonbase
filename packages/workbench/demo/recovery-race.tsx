@@ -120,7 +120,7 @@ const built = await buildDemoEditor(
   ),
   editor = built.handle;
 function RecoveryRace() {
-  const { recovery } = useAtomValue(built.editor.atoms.views);
+  const recovery = useAtomValue(built.editor.atoms.views.checkouts);
   const checkout = recovery.checkouts.find(
     (item) => item.checkoutId === recovery.selectedCheckoutId,
   );

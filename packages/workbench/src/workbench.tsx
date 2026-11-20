@@ -2,6 +2,7 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -94,16 +95,22 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   ref,
 ) {
   const actions = useEditorActions(workbenchEditor);
-  const state = useAtomValue(workbenchEditor.atoms.snapshot);
-  const openCheckouts = state.recovery.checkouts.filter((target) =>
-    state.recovery.openCheckoutIds.includes(target.checkoutId),
+  // Each piece read here changes only with what it shows: typing changes none of them.
+  const { atoms } = workbenchEditor;
+  const ready = useAtomValue(atoms.session.ready),
+    preserving = useAtomValue(atoms.session.preserving),
+    mutating = useAtomValue(atoms.mutating),
+    known = useAtomValue(atoms.views.checkouts);
+  const openCheckouts = useMemo(
+    () => known.checkouts.filter((target) => known.openCheckoutIds.includes(target.checkoutId)),
+    [known],
   );
   const checkout =
     project && openCheckouts.find((target) => checkoutKey(target) === checkoutKey(project));
-  const view = checkout && state.recovery.views.get(checkout.checkoutId),
+  const shownTabs = useAtomValue(atoms.views.checkoutTabs(checkout?.checkoutId ?? ''));
+  const view = checkout && shownTabs,
     target = checkout && view?.active ? { checkout, path: view.active } : undefined;
-  const buffer =
-    target && state.buffers.find((buffer) => fileKey(buffer.target) === fileKey(target));
+  const gitStatus = useAtomValue(atoms.discovery.git(checkout ? checkoutKey(checkout) : ''));
   const mode = (target && view?.fileViews?.get(target.path)) || 'file';
   const projectIdentity = project ? checkoutKey(project) : null;
   // Ends once this workbench stops showing the checkout, abandoning a close's open of the file
@@ -120,10 +127,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const git = checkout?.vcs === 'git';
   // Git lists a file once per area it changed in (staged and unstaged, say); count it once.
   const changedFiles = new Set(
-    ((checkout && state.git[checkoutKey(checkout)]?.changes) || []).map((change) => change.path),
+    ((checkout && gitStatus?.changes) || []).map((change) => change.path),
   ).size;
-  const following = state.recovery.followActiveFile ?? true;
-  const choice = state.closePrompt;
+  const following = useAtomValue(atoms.views.followActiveFile);
+  const choice = useAtomValue(atoms.closePrompt);
+  const sidebarWidth = useAtomValue(atoms.views.sidebarWidth);
   const [anchorReset, setAnchorReset] = useState(0);
   const [picker, setPicker] = useState<PickerRequest | null>(null),
     [reveal, setReveal] = useState<EditorReveal>(),
@@ -145,7 +153,6 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
 
   const mutations = useWorkbenchMutations({
     actions,
-    state,
     openCheckouts,
     pickerOpen: !!picker,
   });
@@ -157,7 +164,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     root,
     checkout,
     active: view?.active,
-    blocked: !!choice || dialogOpen || state.preserving,
+    blocked: !!choice || dialogOpen || preserving,
     findTarget: (origin) => {
       if (origin === 'tree') return treeElement.current;
       if (!target) return undefined;
@@ -169,7 +176,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   });
   useEffect(
     () => () => {
-      const prompt = actions.getSnapshot().closePrompt;
+      const prompt = actions.read(actions.atoms.closePrompt);
       if (prompt) actions.answerClose(prompt.id, 'cancel');
     },
     [actions],
@@ -180,7 +187,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       const left = shown.current;
       if (!checkout) return false;
       const closed = yield* actions.close(paths.map((path) => ({ checkout, path })));
-      const next = actions.getSnapshot().recovery;
+      const next = actions.read(atoms.views.recovery);
       const path = next.views.get(checkout.checkoutId)?.active;
       const shownStill = left && !(yield* Deferred.isDone(left));
       if (closed && path && next.openCheckoutIds.includes(checkout.checkoutId) && shownStill)
@@ -190,7 +197,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       return closed;
     });
   function openPicker(mode: PickerMode) {
-    if (state.preserving || dialog) return;
+    if (preserving || dialog) return;
     setPicker({ mode, text: mode === 'find' ? readSelection(root.current) : '' });
   }
   const openPickedFile: PickerOpenFile = (target, at) =>
@@ -213,7 +220,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       Effect.andThen(
         actions.reveal(target),
         Effect.sync(() => {
-          const current = actions.getSnapshot().recovery;
+          const current = actions.read(atoms.views.checkouts);
           if (
             current.openCheckoutIds.includes(checkout.checkoutId) &&
             current.checkouts.some((item) => checkoutKey(item) === checkoutKey(checkout))
@@ -230,7 +237,11 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     setCreateRequest({
       checkout: { ...checkout },
       kind,
-      parent: findCreateFolder(state.listings, checkoutKey(checkout), view.tree.focus),
+      parent: findCreateFolder(
+        actions.read(atoms.discovery.listings(checkoutKey(checkout))),
+        checkoutKey(checkout),
+        actions.read(atoms.views.checkoutTree(checkout.checkoutId))?.focus ?? '',
+      ),
       id: ++createRequests.current,
     });
   }
@@ -251,7 +262,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   ];
   const keys = useWorkbenchKeys({
     actions,
-    state,
+    preserving,
     checkout,
     view,
     target,
@@ -270,9 +281,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
   const paste = useExplorerPaste({
     actions,
     checkout,
-    focus: view?.tree.focus,
     panel,
-    listings: state.listings,
     fileClipboard,
     importFiles,
     explorerElement,
@@ -289,9 +298,8 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         menu={{
           actions,
           checkout,
-          preserving: state.preserving,
+          preserving,
           hasActiveFile: !!target,
-          hideIgnoredFiles: !!view.tree.hideIgnoredFiles,
           following,
           followed: followedFiles,
           moveUndo,
@@ -312,14 +320,13 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
             ref={treeElement}
             key={checkoutKey(checkout)}
             actions={actions}
-            state={state}
             checkout={checkout}
             active={view.active}
             anchorReset={anchorReset}
             visible={visible}
             follow={following && !sidebarHidden && visible}
             followed={followedFiles}
-            dialogOpen={!!(dialogOpen || choice || state.mutating)}
+            dialogOpen={!!(dialogOpen || choice || mutating)}
             canRequestMutation={canRequestMutation}
             requestMutation={mutations.requestMutation}
             runMutation={moveUndo.run}
@@ -336,13 +343,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
             onPaste={(folder) => paste.pasteInto(checkout, folder)}
           />
         ) : (
-          <ChangesView
-            actions={actions}
-            state={state}
-            checkout={checkout}
-            target={target}
-            mode={mode}
-          />
+          <ChangesView actions={actions} checkout={checkout} target={target} mode={mode} />
         )}
       </Explorer>
     ) : null;
@@ -350,11 +351,9 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
     checkout && view ? (
       <EditorArea
         actions={actions}
-        state={state}
         checkout={checkout}
         view={view}
         target={target}
-        buffer={buffer}
         mode={mode}
         git={git}
         visible={visible}
@@ -393,12 +392,12 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
         if (!event.currentTarget.contains(event.relatedTarget)) keys.dismissRecent();
       }}>
       <div {...stylex.props(styles.panel)}>
-        {!state.ready && (
+        {!ready && (
           <p role="status" {...stylex.props(styles.empty)}>
             Load editor recovery before opening a checkout.
           </p>
         )}
-        {!checkout && state.ready && (
+        {!checkout && ready && (
           <p {...stylex.props(styles.empty)}>
             Open a checkout to browse files and edit. Unsaved changes belong to this editor
             instance.
@@ -410,7 +409,7 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
             renderLayout({ explorer, editor })
           ) : (
             <SidebarLayout
-              width={state.recovery.sidebarWidth}
+              width={sidebarWidth}
               hidden={sidebarHidden}
               resize={(width) => actions.resizeSidebar(width)}
               // Hiding the explorer while focus is in it hands focus to the editor.
@@ -423,7 +422,6 @@ export const Workbench = forwardRef<WorkbenchHandle, WorkbenchProps>(function Wo
       </div>
       <StatusMessages
         actions={actions}
-        state={state}
         retryRecovery={() =>
           run(
             focus.withFocus(

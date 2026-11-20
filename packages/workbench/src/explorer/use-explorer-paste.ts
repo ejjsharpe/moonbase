@@ -1,6 +1,6 @@
 import type { ClipboardEvent, KeyboardEvent, RefObject } from 'react';
 import { Effect } from 'effect';
-import type { CheckoutTarget, DirectoryListing } from '@moonbase/contracts/workspace';
+import type { CheckoutTarget } from '@moonbase/contracts/workspace';
 import { checkoutKey } from '@moonbase/application/editor';
 import { findCreateFolder } from '../files-tree/files-tree-rows.ts';
 import type { useFileClipboard } from '../files-tree/use-file-clipboard.ts';
@@ -16,9 +16,7 @@ import { useEditorTask } from '../use-editor-task.ts';
 export function useExplorerPaste({
   actions,
   checkout,
-  focus,
   panel,
-  listings,
   fileClipboard,
   importFiles,
   explorerElement,
@@ -27,10 +25,7 @@ export function useExplorerPaste({
 }: {
   actions: EditorActions;
   checkout: CheckoutTarget | undefined;
-  /** The tree's focused entry. */
-  focus: string | undefined;
   panel: ExplorerPanel;
-  listings: Readonly<Record<string, DirectoryListing>>;
   fileClipboard: ReturnType<typeof useFileClipboard>;
   importFiles: (checkout: CheckoutTarget, references: string[]) => void;
   explorerElement: RefObject<HTMLElement | null>;
@@ -85,6 +80,9 @@ export function useExplorerPaste({
   function pasteFiles(event: ClipboardEvent | KeyboardEvent) {
     const tree = panel === 'files';
     const element = event.target as HTMLElement;
+    // The tree's focused entry, read as the paste happens.
+    const focus =
+      checkout && actions.read(actions.atoms.views.checkoutTree(checkout.checkoutId))?.focus;
     if (
       !checkout ||
       focus === undefined ||
@@ -96,6 +94,7 @@ export function useExplorerPaste({
       return;
     event.preventDefault();
     event.stopPropagation();
+    const listings = actions.read(actions.atoms.discovery.listings(checkoutKey(checkout)));
     pasteInto(checkout, findCreateFolder(listings, checkoutKey(checkout), focus), tree);
   }
   return { pasteInto, pasteFiles };

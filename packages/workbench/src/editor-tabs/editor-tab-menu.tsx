@@ -5,9 +5,7 @@ import { overlays } from '@moonbase/ui/overlays';
 import { workbench } from '@moonbase/ui/workbench';
 import { Icon } from '@moonbase/ui/icons';
 import type { FileTarget, FileView } from '@moonbase/contracts/workspace';
-import type { EditorSnapshot } from '@moonbase/application/editor';
-
-type Buffer = EditorSnapshot['buffers'][number];
+import type { BufferStatus } from '@moonbase/application/editor';
 import type { FocusReturn } from '../focus-return.ts';
 import type { EditorActions } from '../editor-actions.ts';
 import { useEditorTask } from '../use-editor-task.ts';
@@ -37,7 +35,7 @@ export function EditorTabMenu({
   actions: EditorActions;
   preserving: boolean;
   file: FileTarget;
-  buffer: Buffer | undefined;
+  buffer: BufferStatus | undefined;
   /** The checkout's open tabs, in order. */
   openFiles: readonly string[];
   captured: RefObject<string[]>;

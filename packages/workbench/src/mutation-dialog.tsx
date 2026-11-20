@@ -34,11 +34,12 @@ export function Mutation({
 }) {
   const checkout = action.checkout,
     batchImport = action.kind === 'import' && action.nativeReferences!.length > 1;
-  const state = useAtomValue(actions.editor.atoms.snapshot);
+  const disposed = useAtomValue(actions.atoms.session.disposed),
+    known = useAtomValue(actions.atoms.views.checkouts);
   const unavailable =
-    state.disposed ||
-    !state.recovery.openCheckoutIds.includes(checkout.checkoutId) ||
-    !state.recovery.checkouts.some((target) => checkoutKey(target) === checkoutKey(checkout));
+    disposed ||
+    !known.openCheckoutIds.includes(checkout.checkoutId) ||
+    !known.checkouts.some((target) => checkoutKey(target) === checkoutKey(checkout));
   const [destination, setDestination] = useState('');
   const [replacementPaths, setReplacementPaths] = useState('');
   const [busy, run] = usePendingEditorTask(actions);

@@ -1,5 +1,7 @@
 export { editorLayer, type EditorOptions, type EditorServices } from './editor-layer.ts';
 export { makeEditorAtoms, type EditorAtoms } from './editor-atoms.ts';
+export type { CheckoutTabs } from './views/views-atoms.ts';
+export type { BufferStatus } from './buffers/buffers.ts';
 export { toEditorSnapshot, type EditorSnapshot, type EditorParts } from './editor-snapshot.ts';
 export {
   EditorError,
