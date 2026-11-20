@@ -1,6 +1,5 @@
-import { Deferred, Effect, Exit, Stream } from 'effect';
+import { Effect, Stream } from 'effect';
 import { Rpc } from 'effect/rpc';
-import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import type { ChatListState } from '@moonbase/contracts/chat';
 import { isCancellableChatRead, isSameChatHost } from '@moonbase/contracts/chat-validation';
 import { chatInputSchemas } from '@moonbase/contracts/chat-schema';
@@ -23,20 +22,10 @@ import {
 } from '@moonbase/contracts/watch';
 import type { ChatCommand } from '@moonbase/contracts/chat';
 import { UnauthorizedError } from '@moonbase/contracts/errors';
-import {
-  HostUnavailableError,
-  IncompatibleHostError,
-  RequestReusedError,
-} from '@moonbase/contracts/host-errors';
+import { HostUnavailableError, IncompatibleHostError } from '@moonbase/contracts/host-errors';
 import { chatErrorSchemaOf } from '@moonbase/contracts/chat-rpc';
 import { daemonErrorSchemas, isDaemonMutation } from '@moonbase/contracts/daemon-rpc';
-import {
-  ChatAccessError,
-  ChatBusyError,
-  InvalidChatRequestError,
-} from '@moonbase/contracts/chat-errors';
-import { FolderMissingError, FolderRefusedError } from '@moonbase/contracts/folder-errors';
-import { ProviderSetupRefusedError } from '@moonbase/contracts/provider-errors';
+import type { MutationReplay } from './mutation-replay.ts';
 import { projectWatchDelta } from './watch-deltas.ts';
 
 /** The services one daemon serves over RPC, and what its health advertises. */
@@ -147,33 +136,13 @@ export function makeChatHandlers(services: RpcServices) {
   return handlers as never;
 }
 
-/** Request IDs of recent daemon mutations; a repeat of one returns its outcome instead of rerunning. */
-const rememberedDaemonRequests = 256;
-// Errors a daemon raises only before it applies anything, so a refused request may be sent again.
-const refusals = [
-  FolderRefusedError,
-  FolderMissingError,
-  ProviderSetupRefusedError,
-  InvalidChatRequestError,
-  ChatAccessError,
-  ChatBusyError,
-  IncompatibleHostError,
-  UnauthorizedError,
-  RequestReusedError,
-];
-
 /**
  * Daemon handlers for folder approvals, control and provider setup. Each checks the request's
  * host and that health advertises the operation's capability. A mutation's request ID binds its
- * whole input: a repeat returns the first outcome, unless the daemon refused it outright, so
- * nothing of it applied.
+ * whole input: `replay` runs it once per ID and answers a repeat with its outcome.
  */
-export function makeDaemonHandlers(services: RpcServices) {
+export function makeDaemonHandlers(services: RpcServices, replay: MutationReplay) {
   const daemon = services.daemon!;
-  const remembered = new Map<
-    string,
-    { operation: string; input: unknown; outcome: Deferred.Deferred<unknown, unknown> }
-  >();
   const serve = <A>(
     operation: DaemonCommand,
     host: ChatHostTarget,
@@ -189,40 +158,7 @@ export function makeDaemonHandlers(services: RpcServices) {
     const run = () =>
       Effect.suspend(service).pipe(Effect.mapError(toWire(daemonErrorSchemas[operation])));
     if (!isDaemonMutation(operation)) return Effect.andThen(checked, run());
-    return Rpc.uninterruptible(
-      Effect.andThen(
-        checked,
-        Effect.gen(function* () {
-          // Keyed by owner too, so one owner's request IDs never answer for another's.
-          const key = JSON.stringify([input.ownerId ?? null, input.requestId]),
-            prior = remembered.get(key);
-          if (prior) {
-            if (prior.operation !== operation || !areJsonValuesEqual(prior.input, input))
-              return yield* Effect.fail(new RequestReusedError());
-            return (yield* Deferred.await(prior.outcome)) as A;
-          }
-          const outcome = Deferred.makeUnsafe<unknown, unknown>();
-          remembered.set(key, { operation, input, outcome });
-          for (const old of remembered.keys()) {
-            if (remembered.size <= rememberedDaemonRequests) break;
-            remembered.delete(old);
-          }
-          const exit = yield* Effect.exit(run());
-          if (
-            Exit.isFailure(exit) &&
-            exit.cause.reasons.every(
-              (reason) =>
-                reason._tag === 'Fail' &&
-                refusals.some((refusal) => reason.error instanceof refusal),
-            ) &&
-            remembered.get(key)?.outcome === outcome
-          )
-            remembered.delete(key);
-          yield* Deferred.done(outcome, exit);
-          return yield* exit;
-        }),
-      ),
-    );
+    return Rpc.uninterruptible(Effect.andThen(checked, replay(operation, input, run())));
   };
   const local: Record<string, unknown> = {};
   for (const operation of Object.keys(localHostInputSchemas) as (keyof LocalHostHandlers)[])

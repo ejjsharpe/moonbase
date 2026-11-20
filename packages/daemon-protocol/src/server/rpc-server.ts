@@ -8,6 +8,7 @@ import { isStatusRpc } from '@moonbase/contracts/rpc-annotations';
 import { rpcLimits, workspaceRpcLimits } from '@moonbase/contracts/rpc-upgrade';
 import { HostUnavailableError } from '@moonbase/contracts/host-errors';
 import { WorkspaceRpcs } from '@moonbase/contracts/workspace-rpc';
+import { makeMutationReplay } from './mutation-replay.ts';
 import { makeChatHandlers, makeDaemonHandlers, type RpcServices } from './rpc-handlers.ts';
 import {
   makeRpcConnections,
@@ -142,9 +143,10 @@ export const serveRpc = (services: RpcServices, options: RpcServerOptions) =>
       Layer.succeed(RpcAdmission, makeAdmission(options, rpcLimits)),
     ] as const;
     const chat = ChatRpcs.toLayer(makeChatHandlers(services));
+    const replay = yield* makeMutationReplay;
     const server = services.daemon
       ? (() => {
-          const { local, providers } = makeDaemonHandlers(services);
+          const { local, providers } = makeDaemonHandlers(services, replay);
           return RpcServer.layer(
             ChatRpcs.merge(LocalHostRpcs, ProviderSetupRpcs),
             serverOptions,
