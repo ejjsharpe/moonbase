@@ -1,5 +1,6 @@
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Ref, Scope, SubscriptionRef } from 'effect';
 import { EditorError } from '../editor-errors.ts';
+import { awaitForCaller } from '../await-for-caller.ts';
 
 /** The editor's modes, which gate what every concept admits. */
 export type SessionState = {
@@ -117,9 +118,7 @@ export class EditorSession extends Context.Service<EditorSession, EditorSessionS
         const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
           Effect.flatMap(fork(effect), Fiber.join);
         const runWithCaller = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-          Effect.flatMap(fork(effect), (fiber) =>
-            Effect.onInterrupt(Fiber.join(fiber), () => Fiber.interrupt(fiber)),
-          );
+          awaitForCaller(fork(effect), Fiber.join);
         const close = Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             const first = yield* SubscriptionRef.modify(state, (s) => [

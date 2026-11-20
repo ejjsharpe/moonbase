@@ -18,6 +18,7 @@ import type {
   WorkspaceEvent,
 } from '@moonbase/contracts/workspace';
 import { retryWatch, watchRetry } from '../../watch-retry.ts';
+import { awaitForCaller } from '../await-for-caller.ts';
 import { EditorError, isUnavailable, type EditorFailure } from '../editor-errors.ts';
 import { isRelativePath } from '../relative-path.ts';
 import { checkoutKey, sameCheckout } from '../recovery/recovery-references.ts';
@@ -149,9 +150,9 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
           effect: Effect.Effect<A, E>,
           report = true,
         ) =>
-          Effect.flatMap(Effect.forkIn(effect, scope, { startImmediately: true }), (fiber) =>
-            Effect.onInterrupt(Fiber.join(fiber), () => Fiber.interrupt(fiber)),
-          ).pipe(Effect.tapError((error) => (report ? alerts.report(error) : Effect.void)));
+          awaitForCaller(Effect.forkIn(effect, scope, { startImmediately: true }), Fiber.join).pipe(
+            Effect.tapError((error) => (report ? alerts.report(error) : Effect.void)),
+          );
 
         const release = (checkout: CheckoutTarget) =>
           Effect.gen(function* () {

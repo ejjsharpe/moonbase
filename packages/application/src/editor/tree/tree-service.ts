@@ -18,6 +18,7 @@ import type {
   DirectoryListing,
   FileTarget,
 } from '@moonbase/contracts/workspace';
+import { awaitForCaller } from '../await-for-caller.ts';
 import { EditorError, type EditorFailure } from '../editor-errors.ts';
 import { isRelativePath } from '../relative-path.ts';
 import { EditorSession } from '../session/session-service.ts';
@@ -151,6 +152,8 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
                   );
                 },
               );
+              // Activating replaces the idle read in the activation handle, so it follows the read.
+              let activate = false;
               yield* tabs.whileIdle(
                 Effect.gen(function* () {
                   const comparison = yield* workspace.readComparison({ target, area: mode });
@@ -172,12 +175,13 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
                     working &&
                     (yield* views.get).recovery.selectedCheckoutId === checkout.checkoutId
                   )
-                    yield* tabs.activateSelected;
+                    activate = true;
                 }).pipe(
                   // A failed refresh retains the last comparison and current edits.
                   Effect.ignore,
                 ),
               );
+              if (activate) yield* tabs.activateSelected;
             }).pipe(Effect.ignore),
           });
         });
@@ -277,9 +281,9 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
                 ),
               ),
             );
-            const fiber = yield* FiberMap.run(reveals, checkoutKey(checkout))(work);
-            const exit = yield* Effect.onInterrupt(Fiber.await(fiber), () =>
-              Fiber.interrupt(fiber),
+            const exit = yield* awaitForCaller(
+              FiberMap.run(reveals, checkoutKey(checkout))(work),
+              Fiber.await,
             );
             if (Exit.isSuccess(exit)) return exit.value;
             // A newer reveal in the checkout replaced this one.

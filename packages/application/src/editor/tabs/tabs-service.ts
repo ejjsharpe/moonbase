@@ -20,6 +20,7 @@ import {
   type FileTarget,
   type FileView,
 } from '@moonbase/contracts/workspace';
+import { awaitForCaller } from '../await-for-caller.ts';
 import { EditorError, type EditorFailure } from '../editor-errors.ts';
 import { isRelativePath } from '../relative-path.ts';
 import { EditorSession } from '../session/session-service.ts';
@@ -261,11 +262,13 @@ export class EditorTabs extends Context.Service<EditorTabs, EditorTabsShape>()(
               return false;
             }
             if (!(yield* isCurrent)) return false;
-            yield* showOpened(target, mode, options, opened.value.disk, opened.value.comparison);
+            // The opened file's state updates land together or not at all.
+            yield* Effect.uninterruptible(
+              showOpened(target, mode, options, opened.value.disk, opened.value.comparison),
+            );
             return true;
           }).pipe(Effect.catchCause(() => Effect.succeed(false)));
-          const fiber = yield* FiberHandle.run(activation)(work);
-          const exit = yield* Effect.onInterrupt(Fiber.await(fiber), () => Fiber.interrupt(fiber));
+          const exit = yield* awaitForCaller(FiberHandle.run(activation)(work), Fiber.await);
           return Exit.isSuccess(exit) ? exit.value : false;
         });
       const openFile: EditorTabsShape['openFile'] = (target, options = {}) =>
