@@ -30,20 +30,35 @@ const addChange = (batch: Batch, change: Change): Batch => {
  */
 export const makeChangeFeed = Effect.fnUntraced(function* (capacity: number = changeCapacity) {
   const changes = yield* Queue.dropping<Change>(capacity);
+  // What a full queue dropped: that a path was lost, and the latest failure, which must reach the
+  // client because its watcher has stopped.
   const overflowed = yield* Queue.sliding<void>(1);
+  const failed = yield* Queue.sliding<string>(1);
   return {
     /** Records a change; safe to call from a native callback. */
     offer: (change: Change) => {
-      if (!Queue.offerUnsafe(changes, change)) Queue.offerUnsafe(overflowed, undefined);
+      if (Queue.offerUnsafe(changes, change)) return;
+      if ('error' in change) Queue.offerUnsafe(failed, change.error);
+      else Queue.offerUnsafe(overflowed, undefined);
     },
     /** Ends `batches`. */
-    shutdown: Effect.andThen(Queue.shutdown(changes), Queue.shutdown(overflowed)),
-    // Changes are taken a chunk at a time with the overflow signal, so the batch holding the
-    // changes kept while others were dropped is the unnamed one.
+    shutdown: Effect.all([
+      Queue.shutdown(changes),
+      Queue.shutdown(overflowed),
+      Queue.shutdown(failed),
+    ]),
+    // Every chunk polls what was dropped as it is taken, so the batch emitted after a drop is
+    // unnamed and carries a dropped failure. A drop always leaves the queue full, so a later chunk
+    // always follows it.
     batches: Stream.fromQueue(changes).pipe(
       Stream.mapArrayEffect((taken) =>
-        Effect.map(Queue.poll(overflowed), (dropped): Arr.NonEmptyReadonlyArray<Change> =>
-          Option.isSome(dropped) ? [...taken, { path: undefined }] : taken,
+        Effect.map(
+          Effect.all([Queue.poll(overflowed), Queue.poll(failed)]),
+          ([dropped, failure]): Arr.NonEmptyReadonlyArray<Change> => [
+            ...taken,
+            ...(Option.isSome(dropped) ? [{ path: undefined }] : []),
+            ...(Option.isSome(failure) ? [{ error: failure.value }] : []),
+          ],
         ),
       ),
       Stream.aggregateWithin(
