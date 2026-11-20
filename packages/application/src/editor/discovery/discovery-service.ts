@@ -1,12 +1,18 @@
 import {
   Context,
-  Deferred,
+  Duration,
   Effect,
   Exit,
   Fiber,
+  FiberMap,
+  HashMap,
   Layer,
+  Option,
   PubSub,
+  RcMap,
+  Ref,
   Scope,
+  Semaphore,
   Stream,
   SubscriptionRef,
 } from 'effect';
@@ -17,6 +23,7 @@ import type {
   DirectoryListing,
   WorkspaceEvent,
 } from '@moonbase/contracts/workspace';
+import { makeRunAgain } from '../../run-again.ts';
 import { retryWatch, watchRetry } from '../../watch-retry.ts';
 import { awaitForCaller } from '../await-for-caller.ts';
 import { EditorError, isUnavailable, type EditorFailure } from '../editor-errors.ts';
@@ -25,14 +32,8 @@ import { checkoutKey, sameCheckout } from '../recovery/recovery-references.ts';
 import { EditorSession } from '../session/session-service.ts';
 import { EditorAlerts } from '../alerts/alerts-service.ts';
 import { EditorViews } from '../views/views-service.ts';
-import {
-  classify,
-  classifyShown,
-  emptyDiscovery,
-  keepClassification,
-  listingKey,
-  type DiscoveryState,
-} from './discovery.ts';
+import { emptyDiscovery, type DiscoveryState } from './discovery.ts';
+import { makeFolderListings } from './folder-listings.ts';
 
 /** What a refresh of a checkout reads, given by the tabs that show it. */
 export type RefreshSteps = {
@@ -41,24 +42,6 @@ export type RefreshSteps = {
   readonly refreshListings: Effect.Effect<void>;
   /** Reads the active file's comparison again, if one is shown. */
   readonly refreshComparison: Effect.Effect<void>;
-};
-
-/** One listing read of a folder, which later callers join until a change makes it stale. */
-type ListingRead = {
-  scope: Scope.Scope;
-  /** Where its Git classification runs; a newer read closes it, or keeps one running. */
-  classificationScope: Scope.Closeable;
-  listed: boolean;
-  classifying: boolean;
-  /** A change was seen since it started: callers start a new read. */
-  stale: boolean;
-  /** Whether it reports its failures; a quiet one leaves that to later callers. */
-  report: boolean;
-  done: Deferred.Deferred<DirectoryListing, EditorFailure>;
-  /** The read that replaced it, which is newer. */
-  successor?: ListingRead;
-  /** The read whose classification was shown when this one's listing was. */
-  shownClassification?: ListingRead;
 };
 
 export type EditorDiscoveryShape = {
@@ -121,56 +104,84 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
         const session = yield* EditorSession;
         const alerts = yield* EditorAlerts;
         const views = yield* EditorViews;
-        // Each checkout's watch and reads run in a scope under the session's, so closing the
-        // editor ends them all.
+        // Each checkout's reads run in its scope and its watch in `watches`, both under the
+        // session's scope, so releasing the checkout ends them and closing the editor ends them all.
         const root = session.scope;
         const state = yield* SubscriptionRef.make(emptyDiscovery);
         const changed = yield* PubSub.unbounded<CheckoutTarget>();
         const update = (f: (state: DiscoveryState) => DiscoveryState) =>
           SubscriptionRef.update(state, f);
-        /** Per checkout, the scope its watch and reads run in. */
-        const observations = new Map<string, Scope.Closeable>();
-        const reads = new Map<string, ListingRead>();
-        /** Per folder, a superseded Git classification left to finish. */
-        const kept = new Map<string, Scope.Closeable>();
-        /** Per folder, the read whose classification was shown last. */
-        const classified = new Map<string, ListingRead>();
-        const refreshing = new Map<string, { fiber: Fiber.Fiber<void>; again: boolean }>();
-
+        const scopes = yield* Scope.provide(
+          RcMap.make({ lookup: (_key: string) => Effect.scope, idleTimeToLive: Duration.infinity }),
+          root,
+        );
+        const refreshes = yield* Scope.provide(makeRunAgain<string>(), root);
+        /** Per checkout, its watch: a new watch replaces it, leaving the checkout's reads going. */
+        const watches = yield* Scope.provide(FiberMap.make<string>(), root);
+        /** Per checkout, the watch that holds it, which stays so once the watch is lost. */
+        const holders = yield* Ref.make(HashMap.empty<string, object>());
         const checkoutScope = (checkout: CheckoutTarget) =>
-          observations.get(checkoutKey(checkout)) ?? root;
-        /** Runs `effect` in `scope`, so closing the scope ends it, reporting a failure. */
-        const runIn = <A, E>(scope: Scope.Scope, effect: Effect.Effect<A, E>, report = true) =>
-          Effect.flatMap(Effect.forkIn(effect, scope, { startImmediately: true }), Fiber.join).pipe(
-            Effect.tapError((error) => (report ? alerts.report(error) : Effect.void)),
-          );
-        /** `runIn` for a read only its caller wants: interrupting the caller ends it too. */
-        const runForCaller = <A, E>(
-          scope: Scope.Scope,
-          effect: Effect.Effect<A, E>,
-          report = true,
-        ) =>
-          awaitForCaller(Effect.forkIn(effect, scope, { startImmediately: true }), Fiber.join).pipe(
-            Effect.tapError((error) => (report ? alerts.report(error) : Effect.void)),
-          );
+          Effect.scoped(RcMap.get(scopes, checkoutKey(checkout)));
+        const listings = yield* Scope.provide(
+          makeFolderListings({
+            workspace,
+            state,
+            checkoutScope,
+            isOpen: (checkout) =>
+              Effect.map(views.get, ({ recovery }) =>
+                recovery.openCheckoutIds.includes(checkout.checkoutId),
+              ),
+            report: alerts.report,
+          }),
+          root,
+        );
+        /** Runs `effect` in the checkout's scope, so releasing it ends it, reporting a failure. */
+        const runIn = <A, E>(checkout: CheckoutTarget, effect: Effect.Effect<A, E>) =>
+          Effect.flatMap(checkoutScope(checkout), (scope) =>
+            Effect.flatMap(Effect.forkIn(effect, scope, { startImmediately: true }), Fiber.join),
+          ).pipe(Effect.tapError(alerts.report));
 
-        const release = (checkout: CheckoutTarget) =>
+        /** Per checkout, a lock that makes its `observe` and `release` take turns. */
+        const locks = yield* Scope.provide(
+          RcMap.make({ lookup: (_key: string) => Semaphore.make(1) }),
+          root,
+        );
+        const exclusively = <A>(key: string, effect: Effect.Effect<A>) =>
+          Effect.scoped(Effect.flatMap(RcMap.get(locks, key), (lock) => lock.withPermit(effect)));
+
+        /**
+         * Hands the checkout to `holder` (none: to no watch) and stops the watch that held it, then
+         * forgets its lost watch and ends its refresh. The old watch is stopped first, so nothing it
+         * does while the refresh winds down can mark the checkout lost again.
+         */
+        const settle = (key: string, holder: Option.Option<object>) =>
           Effect.gen(function* () {
-            const key = checkoutKey(checkout);
+            yield* Ref.update(holders, (current) =>
+              Option.match(holder, {
+                onNone: () => HashMap.remove(current, key),
+                onSome: (held) => HashMap.set(current, key, held),
+              }),
+            );
+            yield* FiberMap.remove(watches, key);
             yield* update((s) => ({ ...s, lostWatches: s.lostWatches.filter((k) => k !== key) }));
-            const scope = observations.get(key);
-            if (!scope) return;
-            observations.delete(key);
-            yield* Scope.close(scope, Exit.void);
+            yield* refreshes.interrupt(key);
           });
+
+        const release = (checkout: CheckoutTarget) => {
+          const key = checkoutKey(checkout);
+          return exclusively(
+            key,
+            Effect.andThen(settle(key, Option.none()), RcMap.invalidate(scopes, key)),
+          );
+        };
 
         const observe: EditorDiscoveryShape['observe'] = (checkout, { isOpen, onChanged }) =>
           Effect.gen(function* () {
             const key = checkoutKey(checkout);
-            yield* release(checkout);
-            const scope = yield* Scope.fork(root);
-            observations.set(key, scope);
-            const isCurrent = Effect.sync(() => observations.get(key) === scope);
+            const holder = {};
+            const isCurrent = Effect.map(Ref.get(holders), (current) =>
+              Option.exists(HashMap.get(current, key), (held) => held === holder),
+            );
             const live = Effect.map(
               Effect.all([isOpen, isCurrent]),
               ([open, current]) => open && current,
@@ -188,7 +199,7 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
                   // read only now that no later change can slip past the live watch.
                   if (!first || !rewatched) return;
                 }
-                for (const read of reads.values()) read.stale = true;
+                yield* listings.invalidate;
                 yield* PubSub.publish(changed, checkout);
                 yield* onChanged(isCurrent);
               });
@@ -214,7 +225,10 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
                 }),
               ),
             );
-            yield* Effect.forkIn(watch, scope, { startImmediately: true });
+            yield* exclusively(
+              key,
+              Effect.andThen(settle(key, Option.some(holder)), FiberMap.run(watches, key, watch)),
+            );
           });
 
         const list: EditorDiscoveryShape['list'] = (checkout, path, report = true) =>
@@ -222,189 +236,24 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
             yield* views.view(checkout);
             if (!isRelativePath(path, true))
               return yield* new EditorError({ reason: 'invalid-path' });
-            const key = listingKey(checkout, path),
-              scope = checkoutScope(checkout),
-              pending = reads.get(key);
-            if (pending?.scope === scope && !pending.listed && !pending.stale) {
-              // A caller that reports joining a quiet read reports its failure, once.
-              if (report && !pending.report) {
-                pending.report = true;
-                yield* Effect.forkIn(
-                  Effect.catch(Deferred.await(pending.done), alerts.report),
-                  scope,
-                );
-              }
-              return yield* Deferred.await(pending.done);
-            }
-            // A newer read cancels the Git classification it replaces, except for one kept running
-            // per folder: refreshes that come faster than Git answers would otherwise keep every
-            // entry on its last classification, so a file un-ignored by a .gitignore edit would
-            // stay dimmed.
-            const keep = pending?.scope === scope && pending.classifying && !kept.has(key);
-            if (keep) kept.set(key, pending.classificationScope);
-            const read: ListingRead = {
-              scope,
-              classificationScope: yield* Scope.fork(scope),
-              listed: false,
-              classifying: false,
-              stale: false,
-              report,
-              done: yield* Deferred.make<DirectoryListing, EditorFailure>(),
-            };
-            if (pending) pending.successor = read;
-            reads.set(key, read);
-            // Closed only once this read replaced it, so its end can't take it for the current.
-            if (pending && !keep) yield* Scope.close(pending.classificationScope, Exit.void);
-            const isOpen = Effect.map(
-              views.get,
-              ({ recovery }) =>
-                scope.state._tag !== 'Closed' &&
-                recovery.openCheckoutIds.includes(checkout.checkoutId),
-            );
-            const isCurrent = Effect.map(isOpen, (open) => open && reads.get(key) === read);
-            /** Whether a read newer than this one already shows its classification. */
-            const newerShown = () => {
-              const shown = classified.get(key);
-              for (let next = read.successor; next; next = next.successor)
-                if (next === shown) return true;
-              return false;
-            };
-            const work = Effect.gen(function* () {
-              const listed = yield* Effect.exit(
-                runIn(
-                  scope,
-                  workspace.listDirectory({ checkout, path, includeIgnoredStatus: false }),
-                  read.report,
-                ),
-              );
-              if (Exit.isFailure(listed)) {
-                yield* Deferred.failCause(read.done, listed.cause);
-                return;
-              }
-              const listing = listed.value;
-              if (yield* isCurrent) {
-                read.listed = true;
-                read.shownClassification = classified.get(key);
-                yield* update((s) => ({
-                  ...s,
-                  listings: { ...s.listings, [key]: keepClassification(listing, s.listings[key]) },
-                }));
-              }
-              yield* Deferred.succeed(read.done, listing);
-              if (
-                !(yield* isCurrent) ||
-                !listing.entries.some((entry) => entry.ignored === undefined)
-              )
-                return;
-              read.classifying = true;
-              const answer = yield* Effect.exit(
-                runIn(
-                  read.classificationScope,
-                  workspace.getIgnoredPaths({
-                    checkout,
-                    path,
-                    paths: listing.entries.map((entry) => entry.path),
-                  }),
-                  read.report,
-                ),
-              );
-              if (Exit.isFailure(answer)) {
-                // Without an answer, entries show as unclassified, not a stale classification.
-                if ((yield* isCurrent) && classified.get(key) === read.shownClassification)
-                  yield* update((s) => ({
-                    ...s,
-                    listings: {
-                      ...s.listings,
-                      [key]: { ...s.listings[key], entries: listing.entries },
-                    },
-                  }));
-                return;
-              }
-              const ignored = answer.value;
-              if (!(yield* isOpen) || newerShown()) return;
-              const current = yield* isCurrent;
-              const shown = (yield* SubscriptionRef.get(state)).listings[key];
-              // Only an answer that replaces the shown flags counts as the newest classification.
-              if (current || (!ignored.error && shown)) classified.set(key, read);
-              if (current)
-                yield* update((s) => ({
-                  ...s,
-                  listings: { ...s.listings, [key]: classify(listing, ignored) },
-                }));
-              else if (!ignored.error && shown)
-                yield* update((s) => ({
-                  ...s,
-                  listings: {
-                    ...s.listings,
-                    [key]: classifyShown(s.listings[key], listing.entries, ignored.paths),
-                  },
-                }));
-            }).pipe(
-              Effect.ensuring(
-                Effect.suspend(() => {
-                  if (reads.get(key) === read) reads.delete(key);
-                  if (kept.get(key) === read.classificationScope) kept.delete(key);
-                  return Scope.close(read.classificationScope, Exit.void);
-                }),
-              ),
-              Effect.onInterrupt(() => Deferred.interrupt(read.done).pipe(Effect.asVoid)),
-            );
-            // The checkout's watch may have been released while the replaced classification
-            // closed: work forked into its closed scope would never run or settle, so the read
-            // ends at once instead, as the checkout's other reads did.
-            yield* Effect.uninterruptible(
-              Effect.suspend(() => {
-                if (scope.state._tag !== 'Closed')
-                  return Effect.asVoid(Effect.forkIn(work, scope, { startImmediately: true }));
-                if (reads.get(key) === read) reads.delete(key);
-                return Effect.andThen(
-                  Scope.close(read.classificationScope, Exit.void),
-                  Deferred.interrupt(read.done),
-                );
-              }),
-            );
-            return yield* Deferred.await(read.done);
+            return yield* listings.list(checkout, path, report);
           });
 
-        const refresh: EditorDiscoveryShape['refresh'] = (checkout, steps) =>
-          Effect.suspend(() => {
-            const key = checkoutKey(checkout);
-            const running = refreshing.get(key);
-            if (running) {
-              running.again = true;
-              return Fiber.join(running.fiber);
-            }
-            const entry = { again: false } as { fiber: Fiber.Fiber<void>; again: boolean };
-            const once = Effect.gen(function* () {
-              yield* steps.refreshListings;
-              if (!(yield* steps.isCurrent)) return;
-              const status = yield* Effect.exit(
-                runIn(checkoutScope(checkout), workspace.gitStatus({ checkout })),
-              );
-              // A failed status was reported; retained buffers stay usable.
-              if (Exit.isSuccess(status) && (yield* steps.isCurrent))
-                yield* update((s) => ({ ...s, git: { ...s.git, [key]: status.value } }));
-              if (!(yield* steps.isCurrent)) return;
-              yield* steps.refreshComparison;
-            });
-            const work = Effect.gen(function* () {
-              do {
-                entry.again = false;
-                yield* once;
-              } while (entry.again && (yield* steps.isCurrent));
-            }).pipe(
-              Effect.ensuring(
-                Effect.sync(() => {
-                  if (refreshing.get(key) === entry) refreshing.delete(key);
-                }),
-              ),
-            );
-            return Effect.flatMap(Effect.forkIn(work, checkoutScope(checkout)), (fiber) => {
-              entry.fiber = fiber;
-              refreshing.set(key, entry);
-              return Fiber.join(fiber);
-            });
+        const refresh: EditorDiscoveryShape['refresh'] = (checkout, steps) => {
+          const key = checkoutKey(checkout);
+          const once = Effect.gen(function* () {
+            if (!(yield* steps.isCurrent)) return;
+            yield* steps.refreshListings;
+            if (!(yield* steps.isCurrent)) return;
+            const status = yield* Effect.exit(runIn(checkout, workspace.gitStatus({ checkout })));
+            // A failed status was reported; retained buffers stay usable.
+            if (Exit.isSuccess(status) && (yield* steps.isCurrent))
+              yield* update((s) => ({ ...s, git: { ...s.git, [key]: status.value } }));
+            if (!(yield* steps.isCurrent)) return;
+            yield* steps.refreshComparison;
           });
+          return refreshes.run(key, once, { latest: true });
+        };
 
         return {
           state,
@@ -419,7 +268,9 @@ export class EditorDiscovery extends Context.Service<EditorDiscovery, EditorDisc
             ),
           list,
           read: (checkout, effect, report = true) =>
-            runForCaller(checkoutScope(checkout), effect, report),
+            Effect.flatMap(checkoutScope(checkout), (scope) =>
+              awaitForCaller(Effect.forkIn(effect, scope, { startImmediately: true }), Fiber.join),
+            ).pipe(Effect.tapError((error) => (report ? alerts.report(error) : Effect.void))),
           refresh,
         } satisfies EditorDiscoveryShape;
       }),

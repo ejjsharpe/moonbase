@@ -1,14 +1,4 @@
-import {
-  Context,
-  Effect,
-  FiberHandle,
-  Layer,
-  Option,
-  Ref,
-  Semaphore,
-  Stream,
-  SubscriptionRef,
-} from 'effect';
+import { Context, Effect, FiberHandle, Layer, Option, Ref, Stream, SubscriptionRef } from 'effect';
 import type { ChatListState, ChatOutput, ChatSummary, ChatTarget } from '@moonbase/contracts/chat';
 import { ChatConfig } from '../chat-config.ts';
 import { ChatRefusedError, isChatUnavailable } from '../chat-errors.ts';
@@ -17,6 +7,7 @@ import { ChatDrafts } from '../drafts/drafts-service.ts';
 import { isSameSession } from '../drafts/drafts.ts';
 import { ChatLink } from '../link/link-service.ts';
 import { ChatSelection } from '../selection/selection-service.ts';
+import { makeRunAgain } from '../../run-again.ts';
 import { retryWatch } from '../../watch-retry.ts';
 import {
   addCreatedChat,
@@ -37,9 +28,6 @@ type Listing = {
   watched?: ChatListState;
   /** Refresh is reading the first listing; watch pages wait for it. */
   listing: boolean;
-  /** A reload is running, and whether another must run after it. */
-  reloading: boolean;
-  dirty: boolean;
 };
 
 export type ChatListShape = {
@@ -81,14 +69,9 @@ export class ChatList extends Context.Service<ChatList, ChatListShape>()('moonba
       const selection = yield* ChatSelection;
       const { chat, session, limits } = config;
       const state = yield* SubscriptionRef.make<ChatListShown>({ chats: [], nextChats: null });
-      const listing = yield* Ref.make<Listing>({
-        pages: 0,
-        listing: false,
-        reloading: false,
-        dirty: false,
-      });
+      const listing = yield* Ref.make<Listing>({ pages: 0, listing: false });
       const following = yield* FiberHandle.make<void, never>();
-      const reloads = yield* Semaphore.make(1);
+      const reloads = yield* makeRunAgain<'chats'>();
 
       const show = (shown: ChatListShown, pages?: number) =>
         Effect.gen(function* () {
@@ -180,23 +163,7 @@ export class ChatList extends Context.Service<ChatList, ChatListShape>()('moonba
         Effect.gen(function* () {
           if (!(yield* actions.accepting) || !(yield* link.get).ready) return;
           // A call during a reload joins it, unless it needs a listing that begins after now.
-          yield* Ref.update(listing, (l) => ({ ...l, dirty: l.dirty || latest || !l.reloading }));
-          yield* reloads.withPermits(1)(
-            Effect.gen(function* () {
-              for (;;) {
-                const run = yield* Ref.modify(listing, (l) =>
-                  l.dirty
-                    ? [true, { ...l, dirty: false, reloading: true }]
-                    : [false, { ...l, reloading: false }],
-                );
-                if (!run) return;
-                yield* reloadOnce;
-              }
-            }).pipe(
-              // A reload its link's end interrupts leaves the next call free to list.
-              Effect.ensuring(Ref.update(listing, (l) => ({ ...l, reloading: false }))),
-            ),
-          );
+          yield* reloads.run('chats', reloadOnce, { latest });
         });
 
       return {
