@@ -181,6 +181,9 @@ export class EditorTree extends Context.Service<EditorTree, EditorTreeShape>()(
                   Effect.ignore,
                 ),
               );
+              // Activated after the idle read returns: the read runs in the same handle the
+              // activation would replace. It stays idle-guarded only because the read's exit
+              // resumes this fiber synchronously and nothing here waits before the open starts.
               if (activate) yield* tabs.activateSelected;
             }).pipe(Effect.ignore),
           });
