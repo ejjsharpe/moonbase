@@ -172,13 +172,18 @@ export class EditorSession extends Context.Service<EditorSession, EditorSessionS
           }),
           initialize: (checkoutId, work) =>
             Effect.gen(function* () {
-              if (Option.isSome(yield* FiberHandle.get(initialization)))
-                return yield* new EditorError({ reason: 'initializing-already' });
               const marked = update((s) => ({ ...s, initializing: checkoutId })).pipe(
                 Effect.andThen(work),
                 Effect.ensuring(update((s) => ({ ...s, initializing: null }))),
               );
-              return yield* Fiber.join(yield* FiberHandle.run(initialization, marked));
+              // `onlyIfMissing` starts nothing while another runs; the handle then holds that one.
+              const started = yield* FiberHandle.run(initialization, marked, {
+                onlyIfMissing: true,
+              });
+              const running = FiberHandle.getUnsafe(initialization);
+              if (Option.isSome(running) && running.value !== started)
+                return yield* new EditorError({ reason: 'initializing-already' });
+              return yield* Fiber.join(started);
             }),
           awaitInitialization,
           close,

@@ -7,6 +7,7 @@ import {
   FiberSet,
   Layer,
   Option,
+  Ref,
   Scope,
   ScopedRef,
   SubscriptionRef,
@@ -18,7 +19,7 @@ import { ChatDrafts } from '../chat/drafts/drafts-service.ts';
 import { TranscriptViewMemory } from '../chat/transcript/transcript-view-memory.ts';
 import { ChatComposers, type ChatComposer } from '../chat/composer/composer-service.ts';
 import { makeComposerChat } from '../chat/composer/composer-chat.ts';
-import { runOrJoin } from '../run-or-join.ts';
+import { runOrJoin } from './run-or-join.ts';
 import {
   ApplicationLifecycleError,
   describeApplicationFailure,
@@ -39,9 +40,9 @@ export type ChatHostState = {
   cleanupPending: boolean;
   /** Releases that failed, newest last: at most 4. */
   cleanupErrors: readonly string[];
-  /** A close is keeping the chat's drafts before it releases it. */
+  /** Host bookkeeping, not for views: a close is keeping the chat's drafts before it releases it. */
   closing: boolean;
-  /** The host is being released for good: it opens nothing more. */
+  /** Host bookkeeping, not for views: the host is being released for good and opens nothing more. */
   releasing: boolean;
 };
 
@@ -138,14 +139,14 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
         yield* Effect.addFinalizer(() => stopAll);
         const fail = (reason: ApplicationLifecycleError['reason'], detail?: string) =>
           Effect.fail(new ApplicationLifecycleError({ reason, detail }));
+        const describeCleanup = (error: unknown) => describeApplicationFailure(error).slice(0, 512);
         const recordCleanupError = (error: unknown) =>
           update((s) => ({
             ...s,
-            cleanupErrors: [
-              ...s.cleanupErrors,
-              describeApplicationFailure(error).slice(0, 512),
-            ].slice(-4),
+            cleanupErrors: [...s.cleanupErrors, describeCleanup(error)].slice(-4),
           }));
+        /** What the release that blocks reopening failed with; Quit's failures don't replace it. */
+        const blockingCleanup = yield* Ref.make<string | undefined>(undefined);
 
         /** Releases the chat's scope as the application's cleanup, which blocks reopening. */
         const ownCleanup = Effect.gen(function* () {
@@ -155,6 +156,7 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
           if (Exit.isFailure(exit)) {
             const error = failureOf(exit);
             yield* recordCleanupError(error);
+            yield* Ref.set(blockingCleanup, describeCleanup(error));
             yield* update((s) => ({
               ...s,
               status: 'cleanup-blocked',
@@ -301,9 +303,8 @@ export class ChatHost extends Context.Service<ChatHost, ChatHostShape>()(
             // An acquisition that finished meanwhile released its own chat.
             if (taken) yield* Effect.exit(ownCleanup);
             else yield* FiberSet.awaitEmpty(cleanups);
-            const { status, cleanupErrors } = yield* get;
-            if (status === 'cleanup-blocked')
-              return yield* fail('cleanup-failed', cleanupErrors.at(-1));
+            if ((yield* get).status === 'cleanup-blocked')
+              return yield* fail('cleanup-failed', yield* Ref.get(blockingCleanup));
           }),
           reportCleanup: recordCleanupError,
         } satisfies ChatHostShape;

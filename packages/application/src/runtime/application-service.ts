@@ -1,5 +1,5 @@
 import { Context, Effect, Exit, FiberHandle, Layer, Option, Ref, SubscriptionRef } from 'effect';
-import { runOrJoin } from '../run-or-join.ts';
+import { runOrJoin } from './run-or-join.ts';
 import { EditorPreservation } from '../editor/preservation/preservation-service.ts';
 import { EditorSession } from '../editor/session/session-service.ts';
 import { EditorLoader } from '../editor/editor-loader.ts';
