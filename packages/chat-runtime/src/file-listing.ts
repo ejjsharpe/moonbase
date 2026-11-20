@@ -1,4 +1,4 @@
-import { Data, Deferred, Duration, Effect, Exit, Option } from 'effect';
+import { Deferred, Duration, Effect, Exit, Option, Schema } from 'effect';
 import { type ProcessGroupExit, type ProcessGroupsShape } from '@moonbase/process-group';
 
 /** How long a listing may run, and how long its stopped process group has after SIGTERM. */
@@ -16,11 +16,11 @@ export type ListingOutput = { bytes: Buffer; truncated: boolean };
  * A listing that did not finish: its command is missing, it exited with `status` (having printed
  * `output`), or it failed otherwise.
  */
-export class ListingError extends Data.TaggedError('ListingError')<{
-  reason: 'missing' | 'exited' | 'failed';
-  status?: number;
-  output: Buffer;
-}> {
+export class ListingError extends Schema.TaggedError<ListingError>()('ListingError', {
+  reason: Schema.Literals(['missing', 'exited', 'failed']),
+  status: Schema.optional(Schema.Int),
+  output: Schema.instanceOf(Buffer),
+}) {
   override get message() {
     return this.reason === 'exited'
       ? `The file listing exited with ${this.status}`

@@ -1,5 +1,5 @@
 import { isAbsolute } from 'node:path';
-import { Data, Effect, FileSystem, Stream } from 'effect';
+import { Effect, FileSystem, Stream } from 'effect';
 import { ChildProcess, ChildProcessSpawner } from 'effect/process';
 import { CredentialKeyError } from '@moonbase/contracts/provider-errors';
 import {
@@ -26,8 +26,6 @@ const lineBytes = 4096;
 // kind, backslashes or control characters reach a command.
 const isQuotable = (value: string) =>
   [...value].every((character) => !'"\'\\\x7f'.includes(character) && character >= ' ');
-/** `security` could not start, ran out of time or printed more than any answer of ours. */
-class SecurityStopped extends Data.TaggedError('SecurityStopped') {}
 
 /**
  * A generic-password item (service `Moonbase daemon credentials`, account `storeId`) read and
@@ -70,12 +68,11 @@ export const makeKeychainKeySource = (
             problem: 'keychain-failed',
             ...(status === null ? {} : { status }),
           });
-    /** Runs one command line; a spawn failure, a timeout or too much output is a stopped command. */
+    /** Runs one command line; a spawn failure, a timeout or too much output is a failed command. */
     const run = (line: string) =>
       Effect.scoped(
         Effect.gen(function* () {
-          if (Buffer.byteLength(line) >= lineBytes)
-            return yield* Effect.fail(new SecurityStopped());
+          if (Buffer.byteLength(line) >= lineBytes) return yield* Effect.fail(failed(null));
           const handle = yield* spawner.spawn(
             ChildProcess.make('/usr/bin/security', ['-i'], {
               env: {
@@ -97,7 +94,7 @@ export const makeKeychainKeySource = (
                   () => '',
                   (output, chunk) =>
                     output.length + chunk.length > lineBytes
-                      ? Effect.fail(new SecurityStopped())
+                      ? Effect.fail(failed(null))
                       : Effect.succeed(output + chunk),
                 ),
               ),
@@ -112,7 +109,7 @@ export const makeKeychainKeySource = (
       ).pipe(
         Effect.timeoutOrElse({
           duration: timeoutMs,
-          orElse: () => Effect.fail(new SecurityStopped()),
+          orElse: () => Effect.fail(failed(null)),
         }),
         Effect.mapError(() => failed(null)),
       );

@@ -2,6 +2,7 @@ import { constants } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
+import { Effect } from 'effect';
 import type { Provider } from '@earendil-works/pi-ai/models';
 // The package ships TypeScript source without an exports map; bundle hosts compile it.
 import { createClaudeCodeProvider } from '@earendil-works/pi-claude-code/src/provider.ts';
@@ -67,8 +68,13 @@ function findClaudeCodePath(command: string | undefined) {
   ].join(delimiter);
 }
 
-/** Claude Code keeps warm workers for up to five minutes; hosts close them when they shut down. */
-export const closeClaudeCodeProcesses = (): Promise<void> => closeClaudeProcesses();
+/**
+ * Claude Code keeps warm workers for up to five minutes; hosts close them when they shut down. A
+ * failed close is ignored: the workers it missed still exit on their own.
+ */
+export const closeClaudeCodeProcesses: Effect.Effect<void> = Effect.tryPromise(() =>
+  closeClaudeProcesses(),
+).pipe(Effect.ignore);
 
 /** Settings the library reads through the auth context. */
 const providerEnvNames = [
