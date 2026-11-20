@@ -70,8 +70,11 @@ test('a running mutation is never run again: not after its caller goes, nor once
   runScoped(
     Effect.gen(function* () {
       const { runs, release, approve, start } = yield* replayFixture;
-      // Its caller going leaves the mutation running.
-      yield* Fiber.interrupt(yield* start('held', '/held'));
+      // Its caller going leaves the mutation running. A second caller keeps the request awaited,
+      // so the newer requests evict it from the remembered ones while it runs.
+      const gone = yield* start('held', '/held');
+      const kept = yield* start('held', '/held');
+      yield* Fiber.interrupt(gone);
       const newer = Array.from({ length: 300 }, (_, index) => `newer-${index}`);
       for (const id of newer) yield* approve(id, '/done');
       // A repeat, past the remembered requests, joins the run still going, and the input still
@@ -80,6 +83,7 @@ test('a running mutation is never run again: not after its caller goes, nor once
       const reused = yield* start('held', '/other');
       yield* Deferred.succeed(release, undefined);
       assert.equal(failureTag(yield* Fiber.join(repeat)), 'succeeded');
+      assert.deepEqual(yield* Fiber.join(kept), yield* Fiber.join(repeat));
       assert.equal(failureTag(yield* Fiber.join(reused)), 'RequestReusedError');
       assert.equal(runs.filter((run) => run === 'held:/held').length, 1);
       // A settled request among the last 256 still replays; one past them is forgotten.

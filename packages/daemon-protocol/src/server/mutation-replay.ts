@@ -1,15 +1,4 @@
-import {
-  Cache,
-  Duration,
-  Effect,
-  Equal,
-  Exit,
-  Fiber,
-  FiberMap,
-  Hash,
-  Option,
-  Semaphore,
-} from 'effect';
+import { Cache, Duration, Effect, Equal, Exit, Fiber, FiberMap, Hash, Option } from 'effect';
 import { areJsonValuesEqual } from '@moonbase/contracts/common';
 import { UnauthorizedError } from '@moonbase/contracts/errors';
 import { IncompatibleHostError, RequestReusedError } from '@moonbase/contracts/host-errors';
@@ -77,21 +66,19 @@ class RequestKey implements Equal.Equal {
  */
 export const makeMutationReplay = Effect.gen(function* () {
   const running = yield* FiberMap.make<string, Outcome>();
-  // Finding a request's run and starting it if there is none are one step.
-  const starting = yield* Semaphore.make(1);
+  // Finding a request's run and starting it if there is none happen in one synchronous step:
+  // `FiberMap.run` forks and records the run without yielding, so no other lookup comes between.
   const findOrStart = (key: RequestKey) =>
-    starting.withPermits(1)(
-      Effect.suspend(() => {
-        const run = FiberMap.getUnsafe(running, key.id);
-        if (Option.isSome(run)) return Effect.succeed(run.value);
-        const outcome = Effect.map(Effect.exit(key.run), (exit) => ({
-          operation: key.operation,
-          input: key.input,
-          exit,
-        }));
-        return FiberMap.run(running, key.id, Effect.uninterruptible(outcome));
-      }),
-    );
+    Effect.suspend(() => {
+      const run = FiberMap.getUnsafe(running, key.id);
+      if (Option.isSome(run)) return Effect.succeed(run.value);
+      const outcome = Effect.map(Effect.exit(key.run), (exit) => ({
+        operation: key.operation,
+        input: key.input,
+        exit,
+      }));
+      return FiberMap.run(running, key.id, Effect.uninterruptible(outcome));
+    });
   const outcomes = yield* Cache.makeWith(
     (key: RequestKey) => Effect.flatMap(findOrStart(key), Fiber.join),
     {

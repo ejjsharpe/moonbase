@@ -122,25 +122,34 @@ export class References {
     return Effect.gen({ self: this }, function* () {
       const directory = yield* this.checkouts.directory(input.checkout);
       // The capture holds a permit for each path until that path's source opens and holds it.
+      // Taking the permits and installing their return are one uninterruptible step.
       const held = { permits: input.paths.length };
-      if (!(yield* Semaphore.takeIfAvailable(this.permits, held.permits)))
-        return yield* new InvalidRequestError({ problem: 'native-limit' });
       const references: string[] = [];
-      return yield* Effect.gen({ self: this }, function* () {
-        for (const p of input.paths)
-          references.push(yield* this.captureOne(p, input, directory, held));
-        // A capture cancelled before it hands its references over keeps none of them.
-        yield* cancellationPoint;
-        return references;
-      }).pipe(
-        Effect.onExit((exit) =>
-          Exit.isSuccess(exit)
-            ? Effect.void
-            : Effect.forEach(references, (token) => this.releaseUnclaimed(token), {
-                discard: true,
-              }).pipe(Effect.catchCause((cause) => this.report(cause))),
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.flatMap(Semaphore.takeIfAvailable(this.permits, held.permits), (taken) =>
+          !taken
+            ? Effect.fail(new InvalidRequestError({ problem: 'native-limit' }))
+            : restore(
+                Effect.gen({ self: this }, function* () {
+                  for (const p of input.paths)
+                    references.push(yield* this.captureOne(p, input, directory, held));
+                  // A capture cancelled before it hands its references over keeps none of them.
+                  yield* cancellationPoint;
+                  return references;
+                }),
+              ).pipe(
+                Effect.onExit((exit) =>
+                  Exit.isSuccess(exit)
+                    ? Effect.void
+                    : Effect.forEach(references, (token) => this.releaseUnclaimed(token), {
+                        discard: true,
+                      }).pipe(Effect.catchCause((cause) => this.report(cause))),
+                ),
+                Effect.ensuring(
+                  Effect.suspend(() => Semaphore.release(this.permits, held.permits)),
+                ),
+              ),
         ),
-        Effect.ensuring(Effect.suspend(() => Semaphore.release(this.permits, held.permits))),
       );
     });
   }
