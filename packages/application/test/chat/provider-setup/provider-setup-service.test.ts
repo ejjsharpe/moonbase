@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { SubscriptionRef } from 'effect';
+import { Effect, Exit, Fiber, SubscriptionRef } from 'effect';
 import type { ProviderState } from '@moonbase/contracts/providers';
 import { ChatProviderSetup } from '@moonbase/application/chat';
 import {
@@ -44,10 +44,11 @@ async function setupFixture(
 test('a sign-in’s reply replaces a held status read, and answers never enter state or storage', async (t) => {
   const held = Promise.withResolvers<ProviderState>(),
     logout = Promise.withResolvers<ProviderState>();
+  let heldLogin = (): ProviderState | Promise<ProviderState> => signingIn;
   const { f, setup, providers, shown } = await setupFixture(t, (operation) => {
     if (operation === 'getProviders') return held.promise;
     if (operation === 'logoutProvider') return logout.promise;
-    return operation === 'startProviderLogin' ? signingIn : completed;
+    return operation === 'startProviderLogin' ? heldLogin() : completed;
   });
   const refreshing = f.run(setup.refresh);
   await waitFor(() => providers.calls.length === 1);
@@ -60,15 +61,23 @@ test('a sign-in’s reply replaces a held status read, and answers never enter s
   assert(!JSON.stringify(shown()).includes('private-transient-answer'));
   assert(!JSON.stringify(await f.state()).includes('private-transient-answer'));
   assert(!f.storage.value?.includes('private-transient-answer'));
-  // An older command's late failure never replaces a newer command's reply.
+  // An older command's late failure never replaces a newer command's reply: the logout fails
+  // once the newer login has started, and setup stays busy until the login settles too.
   const loggingOut = f.run(setup.logout('openai'));
   await waitFor(() => providers.calls.some((call) => call.operation === 'logoutProvider'));
-  await f.run(setup.login('openai'));
-  // Setup stays busy until every command settles, not just the newest.
-  assert.equal(shown().busy, true);
-  logout.reject(unavailable());
+  const loggedOut = Promise.withResolvers<void>();
+  heldLogin = async () => {
+    logout.reject(unavailable());
+    await loggedOut.promise;
+    return signingIn;
+  };
+  const loggingIn = f.run(setup.login('openai'));
   await loggingOut;
-  await waitFor(() => !shown().busy);
+  assert.equal(shown().error, null);
+  assert.equal(shown().busy, true);
+  loggedOut.resolve();
+  await loggingIn;
+  assert.equal(shown().busy, false);
   assert.equal(shown().error, null);
   assert.equal(shown().status?.flow?.state, 'running');
 });
@@ -114,10 +123,25 @@ test('sign-in progress comes from the watch, never from polling, and a dropped w
   assert(providers.watches.every((watch) => watch.closed));
 });
 
-test('closing the chat cancels a sign-in still running', async (t) => {
-  const { f, setup, providers } = await setupFixture(t, () => signingIn);
-  await f.run(setup.login('openai'));
-  await f.close();
+test('closing the chat cancels a sign-in still running, even one its caller stopped waiting for', async (t) => {
+  const held = Promise.withResolvers<ProviderState>();
+  let caller: Fiber.Fiber<unknown, unknown> | undefined;
+  const { f, setup, providers } = await setupFixture(t, (operation) => {
+    if (operation !== 'startProviderLogin') return signingIn;
+    // The caller is interrupted as soon as the host has the login.
+    caller!.interruptUnsafe();
+    return held.promise;
+  });
+  const loggingIn = f.runtime.runFork(
+    Effect.withFiber((fiber) => {
+      caller = fiber;
+      return setup.login('openai');
+    }),
+  );
+  assert(Exit.hasInterrupts(await f.runtime.runPromise(Fiber.await(loggingIn))));
+  const closing = f.close();
+  held.resolve(signingIn);
+  await closing;
   assert.deepEqual(providers.calls.at(-1), {
     operation: 'cancelProviderLogin',
     input: { flowId: 'flow' },

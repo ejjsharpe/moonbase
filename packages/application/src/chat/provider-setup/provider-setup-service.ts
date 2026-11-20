@@ -8,7 +8,6 @@ import {
   Fiber,
   Layer,
   Option,
-  Semaphore,
   Stream,
   SubscriptionRef,
 } from 'effect';
@@ -25,8 +24,14 @@ export type ProviderSetupSnapshot = {
   busy: boolean;
   error: string | null;
 };
+/** A command that started; its identity is what `ProviderSetupState` tracks. */
+type Command = { readonly read: boolean };
 /** Provider setup's state: what a view shows, and what decides whose reply shows. */
 export type ProviderSetupState = ProviderSetupSnapshot & {
+  /** Commands that started and haven't settled; `busy` while any does. */
+  active: ReadonlySet<Command>;
+  /** The newest command: only its reply or error shows. */
+  owner: Command | null;
   /** The open watch has delivered: it is the state's source and command replies stop replacing it. */
   watched: boolean;
 };
@@ -44,6 +49,31 @@ export type ChatProviderSetupShape = {
   readonly cancel: (flowId: string) => Effect.Effect<void>;
   readonly openUrl: (flowId: string) => Effect.Effect<void>;
   readonly logout: (providerId: string) => Effect.Effect<void>;
+};
+
+/** A command starts, unless it is a read and a mutation runs, whose reply is newer. */
+const startCommand = (s: ProviderSetupState, command: Command): ProviderSetupState | null =>
+  command.read && [...s.active].some((other) => !other.read)
+    ? null
+    : { ...s, active: new Set([...s.active, command]), owner: command, busy: true, error: null };
+
+/**
+ * A command settles: it is no longer active, and its reply shows if it is still the newest
+ * command, a failure as the error and a success as the status until the watch delivers.
+ */
+const settleCommand = (
+  s: ProviderSetupState,
+  command: Command,
+  reply: Reply,
+): ProviderSetupState => {
+  const active = new Set(s.active);
+  active.delete(command);
+  const settled = { ...s, active, busy: active.size > 0 };
+  if (s.owner !== command) return settled;
+  if (Exit.isSuccess(reply)) return s.watched ? settled : { ...settled, status: reply.value };
+  return Cause.hasInterruptsOnly(reply.cause)
+    ? settled
+    : { ...settled, error: describeChatFailure(Cause.squash(reply.cause)) };
 };
 
 /**
@@ -66,35 +96,17 @@ export class ChatProviderSetup extends Context.Service<ChatProviderSetup, ChatPr
         status: null,
         busy: false,
         error: null,
+        active: new Set(),
+        owner: null,
         watched: false,
       });
       const watching = yield* FiberHandle.make<void, never>();
-      /** A read and its reply, which a command that changes state interrupts: its reply is newer. */
+      /** A read, which a command that changes state interrupts: its reply is newer. */
       const reading = yield* FiberHandle.make<void, never>();
       /** Commands that change setup state: each runs to its end, even as the chat closes. */
-      const mutations = yield* FiberSet.make<Reply, never>();
-      /** Shows the newest mutation's reply once it settles; a newer mutation replaces it. */
-      const replying = yield* FiberHandle.make<void, never>();
-      /** Clears `busy` once no command runs; each command's start replaces it. */
-      const settling = yield* FiberHandle.make<void, never>();
-      /** Starting a command, and clearing `busy`, are one step each. */
-      const starting = yield* Semaphore.make(1);
+      const mutations = yield* FiberSet.make<void, never>();
       const update = (f: (s: ProviderSetupState) => ProviderSetupState) =>
         SubscriptionRef.update(state, f);
-      /** Shows a reply: a failure as the error, a success as the status until the watch delivers. */
-      const show = (reply: Reply) =>
-        update((s) => {
-          if (Exit.isSuccess(reply)) return s.watched ? s : { ...s, status: reply.value };
-          return Cause.hasInterruptsOnly(reply.cause)
-            ? s
-            : { ...s, error: describeChatFailure(Cause.squash(reply.cause)) };
-        });
-      const settle = Effect.gen(function* () {
-        yield* FiberSet.awaitEmpty(mutations);
-        yield* FiberHandle.awaitEmpty(reading);
-        yield* FiberHandle.awaitEmpty(replying);
-        yield* starting.withPermit(update((s) => ({ ...s, busy: false })));
-      });
 
       if (port)
         // Registered last, so it runs first: running commands settle and show their replies, then
@@ -103,52 +115,42 @@ export class ChatProviderSetup extends Context.Service<ChatProviderSetup, ChatPr
           Effect.gen(function* () {
             yield* FiberHandle.clear(watching);
             yield* FiberSet.awaitEmpty(mutations);
-            yield* FiberHandle.awaitEmpty(replying);
             const flow = (yield* SubscriptionRef.get(state)).status?.flow;
             if (flow?.state === 'running')
               yield* Effect.ignore(port.cancelProviderLogin({ flowId: flow.id }));
           }),
         );
 
-      /** A command starts: it clears the last error until its own reply. */
-      const begin = update((s) => ({ ...s, busy: true, error: null }));
-      /** Starts a read unless a mutation runs, whose reply is newer. */
-      const startRead = (call: Call) =>
-        Effect.gen(function* () {
-          if (yield* FiberSet.size(mutations)) return [];
-          yield* begin;
-          return [yield* FiberHandle.run(reading, Effect.flatMap(Effect.exit(call), show))];
-        });
-      /** Starts a mutation, which supersedes the read and an older mutation's reply. */
-      const startMutation = (call: Call) =>
-        Effect.gen(function* () {
-          yield* begin;
-          yield* FiberHandle.clear(reading);
-          const mutation = yield* FiberSet.run(
-            mutations,
-            Effect.uninterruptible(Effect.exit(call)),
-          );
-          const reply = yield* FiberHandle.run(
-            replying,
-            Effect.flatMap(Fiber.join(mutation), show),
-          );
-          return [reply, mutation];
-        });
       const command = <K extends ProviderCommand>(operation: K, input: ProviderInput<K>) =>
-        Effect.gen(function* () {
-          const setup = port;
-          if (!setup || !(yield* actions.accepting)) return;
-          const call = (setup[operation] as (input: ProviderInput<K>) => Call)(input);
-          const start = operation === 'getProviders' ? startRead : startMutation;
-          const started: readonly Fiber.Fiber<unknown>[] = yield* starting.withPermit(
-            Effect.gen(function* () {
-              const fibers: readonly Fiber.Fiber<unknown>[] = yield* start(call);
-              if (fibers.length) yield* FiberHandle.run(settling, settle);
-              return fibers;
-            }),
-          );
-          yield* Effect.forEach(started, Fiber.await, { discard: true });
-        });
+        // Starting is one step the caller can't interrupt, so a call that starts always settles;
+        // the caller can stop waiting for it, and the command still settles by itself.
+        Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const setup = port;
+            if (!setup || !(yield* actions.accepting)) return;
+            const self: Command = { read: operation === 'getProviders' };
+            const started = yield* SubscriptionRef.modify(state, (s) => {
+              const next = startCommand(s, self);
+              return next ? [true, next] : [false, s];
+            });
+            if (!started) return;
+            const call = (setup[operation] as (input: ProviderInput<K>) => Call)(input);
+            // A command settles once it ends, after its own cleanup, even if interrupted. A read is
+            // interruptible; a mutation first interrupts the read, whose reply is older, then runs
+            // to its end.
+            const work = Effect.uninterruptible(
+              Effect.exit(
+                self.read
+                  ? Effect.interruptible(call)
+                  : Effect.andThen(FiberHandle.clear(reading), call),
+              ).pipe(Effect.flatMap((reply) => update((s) => settleCommand(s, self, reply)))),
+            );
+            const fiber = self.read
+              ? yield* FiberHandle.run(reading, work)
+              : yield* FiberSet.run(mutations, work);
+            yield* restore(Fiber.await(fiber));
+          }),
+        );
 
       /** Opens the watch unless one is open or waiting to reopen. */
       const watch = Effect.gen(function* () {
